@@ -1,4 +1,4 @@
-# Desk_Buddy <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h0a2 2 0 0 0 2-2v-2a2 2 0 0 0-2-2z"></path><path d="M7 10h10"></path><path d="M12 14v2"></path><rect x="5" y="6" width="14" height="12" rx="2"></rect><circle cx="9" cy="10" r="1"></circle><circle cx="15" cy="10" r="1"></circle></svg>
+# Desk_Buddy
 
 Desk Buddy is an ultra-low-power, switchless, battery-powered desktop companion designed for the ESP32-C3-Zero. It functions as a smart clock, weather station, and interactive digital pet, all while sipping minimal power to stay awake for months.
 
@@ -39,7 +39,7 @@ Ensure your wiring matches the following mapping for the **Waveshare ESP32-C3-Ze
 ## 🚀 Getting Started
 
 1. **Wiring:** Wire according to the table above.
-2. **Flash Firmware:** - Visit the [Robonavigators ESP Flasher](https://robonavigators.github.io/flash.html).
+2. **Flash Firmware:** - Visit the [RoboNavigators ESP Flasher](https://robonavigators.github.io/flash.html).
    - Select **"Desk_Buddy Firmware"** from the menu.
    - Connect your ESP32-C3-Zero via USB.
    - Select your COM/Serial port and click **Upload**.
