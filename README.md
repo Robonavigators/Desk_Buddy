@@ -48,7 +48,7 @@ We use the "Dead Bug" point-to-point soldering method for an ultra-thin footprin
    - Select **"Desk_Buddy Firmware"** from the menu.
    - Connect your ESP32-C3-Zero via USB.
    - Select your COM/Serial port and click **Upload**.
-3. **Setup:** On first boot, the device will broadcast an AP named `Desk_Buddy`. Connect to it and navigate to `192.168.4.1` to input your Wi-Fi credentials.
+3. **Setup:** On first boot, the device will broadcast an AP named `Desk_Buddy`. Connect to it and navigate to `192.168.4.1`or captive portal to input your Wi-Fi credentials.
 
 ## 🛠 Hardware Used
 
