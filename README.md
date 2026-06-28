@@ -20,25 +20,30 @@ Desk Buddy is an ultra-low-power, switchless, battery-powered desktop companion 
     * **Robot Eyes:** Animated personality mode with color-shifting pupils.
 * **Web-Based Config:** Built-in Captive Portal for easy Wi-Fi, location, and timezone setup.
 
-## 🔌 Pinout Configuration
+## 🏗 Hardware Assembly & Pinout
 
-Ensure your wiring matches the following mapping for the **Waveshare ESP32-C3-Zero**. The backlight is controlled via a BC558 PNP transistor for high-side switching.
+We use the "Dead Bug" point-to-point soldering method for an ultra-thin footprint.
+
+
 
 | Function | ESP32-C3 Pin | Connected Component |
 | :--- | :--- | :--- |
 | **Touch Input** | GPIO 3 | TTP223 Sensor |
 | **DHT Power** | GPIO 4 | DHT11 VCC |
 | **DHT Data** | GPIO 5 | DHT11 Data |
-| **Backlight/LED**| GPIO 8 | BC558 Base |
+| **Backlight/LED**| GPIO 8 | BC558 Base (via 1kΩ Resistor) |
 | **SPI MOSI** | GPIO 10 | TFT MOSI |
 | **SPI MISO** | GPIO 9 | TFT MISO |
 | **SPI SCK** | GPIO 8 | TFT SCK |
+| **TFT CS** | GPIO 6 | TFT CS |
+| **TFT DC** | GPIO 7 | TFT DC |
+| **TFT RST** | GPIO 2 | TFT RST |
 
-*Note: The DHT11 is power-gated via GPIO 4 and the backlight via GPIO 8 (BC558) to maximize battery life.*
+*Note: The DHT11 is power-gated via GPIO 4 and the backlight via GPIO 8 (BC558 PNP high-side switch) to maximize battery life.*
 
 ## 🚀 Getting Started
 
-1. **Wiring:** Wire according to the table above. Ensure a resistor is used between GPIO 8 and the BC558 Base.
+1. **Wiring:** Wire according to the table above. Ensure a 1kΩ resistor is used between GPIO 8 and the BC558 Base.
 2. **Flash Firmware:** - Visit the [RoboNavigators ESP Flasher](https://robonavigators.github.io/flash.html).
    - Select **"Desk_Buddy Firmware"** from the menu.
    - Connect your ESP32-C3-Zero via USB.
