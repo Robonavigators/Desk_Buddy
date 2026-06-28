@@ -1,6 +1,6 @@
-# Desk_Buddy
+# Desk_Buddy 
 
-Desk Buddy is an ultra-low-power, switchless, battery-powered desktop companion designed for the ESP32-C3-Zero. It functions as a smart clock, weather station, and interactive digital pet, all while sipping minimal power to stay awake for months.
+Desk Buddy is an ultra-low-power, switchless, battery-powered desktop companion designed for the Waveshare ESP32-C3-Zero. It functions as a smart clock, weather station, and interactive digital pet, all while sipping minimal power to stay awake for months.
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 ![Hardware: ESP32-C3](https://img.shields.io/badge/Hardware-ESP32--C3-orange.svg)
@@ -22,23 +22,23 @@ Desk Buddy is an ultra-low-power, switchless, battery-powered desktop companion 
 
 ## 🔌 Pinout Configuration
 
-Ensure your wiring matches the following mapping for the **Waveshare ESP32-C3-Zero**:
+Ensure your wiring matches the following mapping for the **Waveshare ESP32-C3-Zero**. The backlight is controlled via a BC558 PNP transistor for high-side switching.
 
 | Function | ESP32-C3 Pin | Connected Component |
 | :--- | :--- | :--- |
 | **Touch Input** | GPIO 3 | TTP223 Sensor |
 | **DHT Power** | GPIO 4 | DHT11 VCC |
 | **DHT Data** | GPIO 5 | DHT11 Data |
-| **Sleep LED** | GPIO 8 | Status LED |
+| **Backlight/LED**| GPIO 8 | BC558 Base |
 | **SPI MOSI** | GPIO 10 | TFT MOSI |
 | **SPI MISO** | GPIO 9 | TFT MISO |
 | **SPI SCK** | GPIO 8 | TFT SCK |
 
-*Note: The DHT11 is power-gated via GPIO 4 to maximize battery life.*
+*Note: The DHT11 is power-gated via GPIO 4 and the backlight via GPIO 8 (BC558) to maximize battery life.*
 
 ## 🚀 Getting Started
 
-1. **Wiring:** Wire according to the table above.
+1. **Wiring:** Wire according to the table above. Ensure a resistor is used between GPIO 8 and the BC558 Base.
 2. **Flash Firmware:** - Visit the [RoboNavigators ESP Flasher](https://robonavigators.github.io/flash.html).
    - Select **"Desk_Buddy Firmware"** from the menu.
    - Connect your ESP32-C3-Zero via USB.
