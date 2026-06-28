@@ -4,7 +4,7 @@ Desk Buddy is an ultra-low-power, switchless, battery-powered desktop companion 
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 ![Hardware: ESP32-C3](https://img.shields.io/badge/Hardware-ESP32--C3-orange.svg)
-![Status: Active](https://img.shields.io/badge/Status-Stable-brightgreen.svg)
+![Status: Stable](https://img.shields.io/badge/Status-Stable-brightgreen.svg)
 
 ## 📋 Features
 
@@ -36,6 +36,15 @@ Ensure your wiring matches the following mapping for the **Waveshare ESP32-C3-Ze
 
 *Note: The DHT11 is power-gated via GPIO 4 to maximize battery life.*
 
+## 🚀 Getting Started
+
+1. **Wiring:** Wire according to the table above.
+2. **Flash Firmware:** - Visit the [RoboNavigators ESP Flasher](https://robonavigators.github.io/flash.html).
+   - Select **"Desk_Buddy Firmware"** from the menu.
+   - Connect your ESP32-C3-Zero via USB.
+   - Select your COM/Serial port and click **Upload**.
+3. **Setup:** On first boot, the device will broadcast an AP named `Desk_Buddy`. Connect to it and navigate to `192.168.4.1` to input your Wi-Fi credentials.
+
 ## 🛠 Hardware Used
 
 | Component | Specification |
@@ -45,12 +54,6 @@ Ensure your wiring matches the following mapping for the **Waveshare ESP32-C3-Ze
 | **Sensor** | DHT11 (Temperature/Humidity) |
 | **Input** | TTP223 Capacitive Touch Module |
 | **Battery** | Li-Po (with TP4056 USB-C Charger) |
-
-## 🚀 Getting Started
-
-1. **Wiring:** Wire according to the table above.
-2. **Platform:** Compile using the Arduino IDE with the "ESP32C3 Dev Module" board settings.
-3. **Setup:** On first boot, the device will broadcast an AP named `Desk_Buddy`. Connect to it and navigate to `192.168.4.1` to input your Wi-Fi credentials.
 
 ## ⚖️ License
 
