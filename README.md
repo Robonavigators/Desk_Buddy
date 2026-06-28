@@ -1,4 +1,4 @@
-# Desk Buddy 🤖
+# Desk_Buddy 🤖
 
 Desk Buddy is an ultra-low-power, switchless, battery-powered desktop companion designed for the ESP32-C3-Zero. It functions as a smart clock, weather station, and interactive digital pet, all while sipping minimal power to stay awake for months.
 
