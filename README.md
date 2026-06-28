@@ -44,7 +44,7 @@ We use the "Dead Bug" point-to-point soldering method for an ultra-thin footprin
 ## 🚀 Getting Started
 
 1. **Wiring:** Wire according to the table above. Ensure a 1kΩ resistor is used between GPIO 8 and the BC558 Base.
-2. **Flash Firmware:** - Visit the [RoboNavigators ESP Flasher](https://robonavigators.github.io/flash.html).
+2. **Flash Firmware:** - Visit the [Robonavigators ESP Flasher](https://robonavigators.github.io/flash.html).
    - Select **"Desk_Buddy Firmware"** from the menu.
    - Connect your ESP32-C3-Zero via USB.
    - Select your COM/Serial port and click **Upload**.
