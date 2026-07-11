@@ -2,17 +2,17 @@
 
 
 
-![License](https://img.shields.io/badge/license-MIT-green.svg)
+![License](https://img.shields.io/badge/License-MIT-yellow.svg)
 
 
 
 
-![Status](https://img.shields.io/badge/status-active-brightgreen)
+![Status](https://img.shields.io/badge/Status-Active-brightgreen)
 
 
 
 
-![Audio](https://img.shields.io/badge/audio-I2S-orange)
+![Audio](https://img.shields.io/badge/Audio-I2S-orange)
 
 
 
