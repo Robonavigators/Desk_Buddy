@@ -2,7 +2,7 @@
 
 
 
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)  ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen.svg) ![Hardware: ESP32-S3-Zero](https://img.shields.io/badge/Hardware-ESP32--S3--Zero-blue.svg). ![Audio: I2S](https://img.shields.io/badge/Audio-I2S%20Digital-orange.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg). ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen.svg). ![Hardware: ESP32-S3-Zero](https://img.shields.io/badge/Hardware-ESP32--S3--Zero-blue.svg). ![Audio: I2S](https://img.shields.io/badge/Audio-I2S%20Digital-orange.svg)
 
 
 
@@ -65,11 +65,12 @@ To keep the pin count manageable, the TFT, I2S amplifier, DHT11, touch pad, and 
 
 ## ⚡ Installation
 
-1. Install the required libraries in Arduino IDE / PlatformIO: `WiFi`, `WebServer`, `DNSServer`, `Preferences`, `HTTPClient`, `ArduinoJson` (v7+), `TFT_eSPI`, `I2S`, `ArduinoOTA`, and the Adafruit `DHT sensor library`.
-2. Edit `User_Setup.h` inside the `TFT_eSPI` library to match the pin mapping above and select the correct display driver. **This step is required** — the S3-Zero pinout is not TFT_eSPI's default target.
-3. Select an **ESP32-S3-Zero** board profile in your IDE, matching your board's flash/PSRAM configuration.
-4. Place `desk_buddy.ino` and `alarms.h` together in the same sketch folder.
-5. Upload over USB.
+The easiest way to install the firmware is directly through your web browser using Web Serial:
+
+1. Go to [Robonavigators ESP Flasher](https://robonavigators.github.io/flash.html).
+2. Choose **Desk_Buddy Firmware** from the firmware menu.
+3. Click the connect button and select your ESP32-S3-Zero's COM/Serial port from the browser popup.
+4. Click upload to flash the firmware directly to your board.
 
 ---
 
