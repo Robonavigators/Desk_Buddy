@@ -2,12 +2,7 @@
 
 
 
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)  ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen.svg) ![Hardware: ESP32-S3-Zero](https://img.shields.io/badge/Hardware-ESP32--S3--Zero-blue.svg)
-
-
-
-
-![Audio: I2S](https://img.shields.io/badge/Audio-I2S%20Digital-orange.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)  ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen.svg) ![Hardware: ESP32-S3-Zero](https://img.shields.io/badge/Hardware-ESP32--S3--Zero-blue.svg). ![Audio: I2S](https://img.shields.io/badge/Audio-I2S%20Digital-orange.svg)
 
 
 
