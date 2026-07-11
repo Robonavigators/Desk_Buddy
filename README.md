@@ -1,65 +1,121 @@
-# Desk_Buddy 
-
-Desk Buddy is an ultra-low-power, switchless, battery-powered desktop companion designed for the Waveshare ESP32-C3-Zero. It functions as a smart clock, weather station, and interactive digital pet, all while sipping minimal power to stay awake for months.
-
-![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
-![Hardware: ESP32-C3](https://img.shields.io/badge/Hardware-ESP32--C3-orange.svg)
-![Status: Stable](https://img.shields.io/badge/Status-Stable-brightgreen.svg)
-
-## 📋 Features
-
-* **Switchless Interface:** Completely solid-state design utilizing capacitive touch sensors.
-* **Intelligent Power Management:**
-    * Deep sleep standby (~12.5 µA).
-    * Dynamic sensor power gating (DHT11 is only powered when reading).
-    * Thermal throttling to prevent overheating.
-* **4-in-1 UI Layers:**
-    * **Clock:** High-contrast time, indoor environment, and weather summary.
-    * **Today's Weather:** Graphical condition icons and humidity monitoring.
-    * **3-Day Forecast:** Upcoming weather trends.
-    * **Robot Eyes:** Animated personality mode with color-shifting pupils.
-* **Web-Based Config:** Built-in Captive Portal for easy Wi-Fi, location, and timezone setup.
-
-## 🏗 Hardware Assembly & Pinout
-
-We use the "Dead Bug" point-to-point soldering method for an ultra-thin footprint.
+# 🖥️ Desk Buddy — Smart Desk Clock Firmware
 
 
 
-| Function | ESP32-C3 Pin | Connected Component |
-| :--- | :--- | :--- |
-| **Touch Input** | GPIO 3 | TTP223 Sensor |
-| **DHT Power** | GPIO 4 | DHT11 VCC |
-| **DHT Data** | GPIO 5 | DHT11 Data |
-| **Backlight/LED**| GPIO 8 | BC558 Base (via 1kΩ Resistor) |
-| **SPI MOSI** | GPIO 10 | TFT MOSI |
-| **SPI MISO** | GPIO 9 | TFT MISO |
-| **SPI SCK** | GPIO 8 | TFT SCK |
-| **TFT CS** | GPIO 6 | TFT CS |
-| **TFT DC** | GPIO 7 | TFT DC |
-| **TFT RST** | GPIO 2 | TFT RST |
+![Platform](https://img.shields.io/badge/platform-ESP32--S3--Zero-blue?logo=espressif&logoColor=white)
 
-*Note: The DHT11 is power-gated via GPIO 4 and the backlight via GPIO 8 (BC558 PNP high-side switch) to maximize battery life.*
 
-## 🚀 Getting Started
 
-1. **Wiring:** Wire according to the table above. Ensure a 1kΩ resistor is used between GPIO 8 and the BC558 Base.
-2. **Flash Firmware:** - Visit the [Robonavigators ESP Flasher](https://robonavigators.github.io/flash.html).
-   - Select **"Desk_Buddy Firmware"** from the menu.
-   - Connect your ESP32-C3-Zero via USB.
-   - Select your COM/Serial port and click **Upload**.
-3. **Setup:** On first boot, the device will broadcast an AP named `Desk_Buddy`. Connect to it and navigate to `192.168.4.1`or captive portal to input your Wi-Fi credentials.
 
-## 🛠 Hardware Used
+![Framework](https://img.shields.io/badge/framework-Arduino-00979D?logo=arduino&logoColor=white)
 
-| Component | Specification |
-| :--- | :--- |
-| **Brain** | Waveshare ESP32-C3-Zero |
-| **Display** | 128x160 TFT LCD (ST7735/ST7789) |
-| **Sensor** | DHT11 (Temperature/Humidity) |
-| **Input** | TTP223 Capacitive Touch Module |
-| **Battery** | Li-Po (with TP4056 USB-C Charger) |
 
-## ⚖️ License
 
-Distributed under the **MIT License**. See `LICENSE` for more information.
+
+![License](https://img.shields.io/badge/license-MIT-green.svg)
+
+
+
+
+![Status](https://img.shields.io/badge/status-active-brightgreen)
+
+
+
+
+![Display](https://img.shields.io/badge/display-TFT__eSPI%20128x160-informational)
+
+
+
+
+![Audio](https://img.shields.io/badge/audio-I2S%20MAX98357A-orange)
+
+
+
+
+![Build](https://img.shields.io/badge/build-passing-success)
+
+
+
+A dual-core ESP32-S3-Zero desk companion with a TFT display, weather forecasting, environmental sensing, a configurable multi-tone alarm system, and a captive-portal web dashboard for setup — all without needing a phone app.
+
+---
+
+## 📋 Table of Contents
+
+- [Overview](#overview)
+- [Hardware Requirements](#hardware-requirements)
+- [Pin Mapping](#pin-mapping)
+- [Architecture](#architecture)
+- [Features](#features)
+- [TFT Screens](#tft-screens)
+- [Touch Controls](#touch-controls)
+- [Web Dashboard](#web-dashboard)
+- [Alarm System](#alarm-system)
+- [Alarm Tones](#alarm-tones)
+- [Setup & Installation](#setup--installation)
+- [Required Libraries](#required-libraries)
+- [First Boot / Wi-Fi Setup](#first-boot--wi-fi-setup)
+- [OTA Updates](#ota-updates)
+- [Thermal Management](#thermal-management)
+- [Deep Sleep](#deep-sleep)
+- [File Structure](#file-structure)
+- [Customization](#customization)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+
+---
+
+## Overview
+
+**Desk Buddy** is a self-contained smart clock built for the **ESP32-S3-Zero**. It displays time, indoor temperature/humidity, live weather, a multi-day forecast, and a list of configured alarms — all on a small TFT screen, cycled via single-tap touch input. Configuration (Wi-Fi, location, alarms, appearance) is done entirely through a built-in web dashboard served by the device itself, accessible either on your home network or via its own captive-portal access point.
+
+**Key philosophy:** the UI, sensors, and web server run on **Core 1**, while alarm audio playback is offloaded to a dedicated **FreeRTOS task pinned to Core 0**. This keeps the screen animations and touch responsiveness smooth even while a multi-note alarm melody is actively playing through the I2S DAC.
+
+---
+
+## Hardware Requirements
+
+| Component | Notes |
+|---|---|
+| **ESP32-S3-Zero** | Dual-core, main controller — this firmware targets the S3-Zero specifically |
+| TFT Display (ST7735/GC9A01-class, SPI) | 128×160 resolution, driven via TFT_eSPI |
+| MAX98357A I2S Amplifier | Drives a small speaker for alarm tones |
+| DHT11 | Indoor temperature & humidity sensor |
+| Capacitive/touch pad | Single touch input (TTP223-style) |
+| Status LED | Used for sleep/wake indication |
+| Speaker | 4–8Ω, paired with MAX98357A |
+
+---
+
+## Pin Mapping
+
+### TFT Display (FSPI)
+| Signal | GPIO |
+|---|---|
+| MOSI | 11 |
+| SCK  | 12 |
+| CS   | 10 |
+| DC   | 9  |
+| RST  | 8  |
+
+### I2S Audio (MAX98357A)
+| Signal | GPIO |
+|---|---|
+| BCLK | 6 |
+| LRC  | 7 |
+| DIN  | 5 |
+| SD (amp shutdown, HIGH = on) | 14 |
+
+### Sensors & Controls
+| Signal | GPIO |
+|---|---|
+| DHT11 Data | 4 |
+| Touch Pad | 3 |
+| Status LED | 2 |
+
+> ⚠️ DHT11 VCC is expected to be hardwired directly to 3.3V (no switched power pin used) to conserve GPIOs.
+> ⚠️ Pin numbers above are specific to the **ESP32-S3-Zero**'s GPIO layout — remap them if porting to a different S3 board.
+
+---
+
+## Architecture
