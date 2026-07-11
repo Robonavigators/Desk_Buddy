@@ -2,16 +2,6 @@
 
 
 
-![Platform](https://img.shields.io/badge/platform-ESP32--S3--Zero-blue?logo=espressif&logoColor=white)
-
-
-
-
-![Framework](https://img.shields.io/badge/framework-Arduino-00979D?logo=arduino&logoColor=white)
-
-
-
-
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 
 
@@ -22,17 +12,7 @@
 
 
 
-![Display](https://img.shields.io/badge/display-TFT__eSPI%20128x160-informational)
-
-
-
-
-![Audio](https://img.shields.io/badge/audio-I2S%20MAX98357A-orange)
-
-
-
-
-![Build](https://img.shields.io/badge/build-passing-success)
+![Audio](https://img.shields.io/badge/audio-I2S-orange)
 
 
 
