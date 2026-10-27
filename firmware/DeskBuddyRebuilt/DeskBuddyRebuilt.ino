@@ -32,6 +32,7 @@ struct Settings {
   bool hour24=true;
   float lat=8.5241f, lon=76.9366f;
   String timezone="Asia/Kolkata";
+  int utcOffset=19800;
 } cfg;
 struct Weather {
   float temperature=NAN, wind=NAN;
@@ -79,6 +80,7 @@ void saveSettings(){
   prefs.putString("city",cfg.city); prefs.putString("accent",cfg.accent);
   prefs.putBool("hour24",cfg.hour24); prefs.putFloat("lat",cfg.lat);
   prefs.putFloat("lon",cfg.lon); prefs.putString("tz",cfg.timezone);
+  prefs.putInt("offset",cfg.utcOffset);
   for(int i=0;i<10;i++){
     String k="a"+String(i);
     uint32_t value=(alarms[i].enabled?1UL:0UL)|((uint32_t)alarms[i].hour<<1)|
@@ -97,6 +99,7 @@ void loadSettings(){
   cfg.lat=prefs.getFloat("lat",cfg.lat);
   cfg.lon=prefs.getFloat("lon",cfg.lon);
   cfg.timezone=prefs.getString("tz",cfg.timezone);
+  cfg.utcOffset=prefs.getInt("offset",cfg.utcOffset);
   for(int i=0;i<10;i++){
     uint32_t v=prefs.getUInt(("a"+String(i)).c_str(),0);
     alarms[i].enabled=v&1; alarms[i].hour=(v>>1)&31;
@@ -343,12 +346,14 @@ void fetchWeather(){
     JsonObject place=geo["results"][0];
     cfg.lat=place["latitude"]|cfg.lat;cfg.lon=place["longitude"]|cfg.lon;
     cfg.timezone=(const char*)(place["timezone"]|"Asia/Kolkata");
-    configTzTime(cfg.timezone.c_str(),NTP_SERVER,"time.google.com");
+    configTime(cfg.utcOffset,0,NTP_SERVER,"time.google.com");
   }
   JsonDocument doc;
   String forecast="https://api.open-meteo.com/v1/forecast?latitude="+String(cfg.lat,5)+"&longitude="+String(cfg.lon,5)+
     "&current=temperature_2m,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=3&timezone=auto";
   if(!getJson(forecast,doc))return;
+  cfg.utcOffset=doc["utc_offset_seconds"]|cfg.utcOffset;
+  configTime(cfg.utcOffset,0,NTP_SERVER,"time.google.com");
   weather.temperature=doc["current"]["temperature_2m"]|NAN;
   weather.code=doc["current"]["weather_code"]|-1;
   weather.wind=doc["current"]["wind_speed_10m"]|NAN;
@@ -359,6 +364,7 @@ void fetchWeather(){
     weather.codes[i]=doc["daily"]["weather_code"][i]|-1;
   }
   weather.ready=true;
+  saveSettings();
 }
 void enterSleep(){
   stopAlarm();digitalWrite(PIN_AMP_SD,LOW);
