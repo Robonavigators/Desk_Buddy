@@ -1,738 +1,1387 @@
+//====================================
+// Robonavigators didn't test this code "Beta Version"
+// Use at your own risk
+//=====================================
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WebServer.h>     
+#include <WebServer.h>
 #include <DNSServer.h>
-#include <Preferences.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
-#include <TFT_eSPI.h> 
-#include <SPI.h>
-#include <driver/gpio.h> 
+#include <Preferences.h>
+#include <ArduinoOTA.h>
+#include <DHT.h>
+#include <TFT_eSPI.h>
+#include <driver/i2s_std.h>
+#include <esp_sleep.h>
+#include <esp32-hal-cpu.h>
 #include <time.h>
-#include <ArduinoOTA.h> 
-#include <DHT.h> 
+#include <math.h>
 
-// ==========================================
-// 1. HARDWARE PIN DEFINITIONS (ESP32-C3-Zero)
-// ==========================================
-#define TOUCH_1       3  // Capacitive Touch Pad (Wakeup Source)
-#define DHT_PWR_PIN   4  // DHT11 VCC (Dynamic Power)
-#define DHT_PIN       5  // DHT11 Data Pin
-#define SLEEP_LED_PIN 8  // TFT Backlight (BC558 PNP: LOW = ON, HIGH = OFF)
+// ===========================================
+// ROBONAVIGATORS - DESK BUDDY
+// Fresh firmware based on README specification
+// ESP32-S3-Zero | Arduino-ESP32 3.x
+// ===========================================
 
-#define DHTTYPE DHT11
-DHT dht(DHT_PIN, DHTTYPE);
+constexpr int PIN_TOUCH = 3;
+constexpr int PIN_LED = 2;
+constexpr int PIN_DHT = 4;
+constexpr int PIN_AMP_SD = 14;
+constexpr int PIN_I2S_DOUT = 5;
+constexpr int PIN_I2S_BCLK = 6;
+constexpr int PIN_I2S_LRCK = 7;
 
-// ==========================================
-// 2. GLOBAL VARIABLES & OBJECTS
-// ==========================================
-TFT_eSPI tft = TFT_eSPI(); 
-TFT_eSprite spr = TFT_eSprite(&tft); 
+constexpr uint32_t TOUCH_DEBOUNCE = 35;
+constexpr uint32_t LONG_PRESS_MS = 650;
+constexpr uint32_t DOUBLE_TAP_MS = 330;
 
-Preferences preferences;
-WebServer server(80); 
-DNSServer dnsServer;
+const char* AP_SSID = "Desk_Buddy";
+const char* AP_PASSWORD = "Desk_Buddy1234@";
+const char* NTP_SERVER = "pool.ntp.org";
 
-// Color Palette
-uint16_t BRAND_BLUE   = tft.color565(4, 132, 248); 
-uint16_t COLOR_SUN    = tft.color565(255, 215, 0);   
-uint16_t COLOR_CLOUD  = tft.color565(180, 180, 185); 
-uint16_t COLOR_RAIN   = tft.color565(100, 180, 255); 
+const char* TONES[] = {
+  "Mario", "Zelda", "Beep", "StarWars"
+};
 
-bool isConfigMode = false;
-bool isThrottled = false;
-float currentChipTemp = 0.0;
-int currentCpuFreq = 160; 
+struct Alarm {
+  bool enabled = false;
+  uint8_t hour = 7;
+  uint8_t minute = 0;
+  uint8_t tone = 2;
+  int lastDay = -1;
+};
 
-// Sensor Data
-volatile float inTemp = 0.0;
-volatile float inHum = 0.0;
+Alarm alarms[10];
 
-// Weather Data
-String owmApiKey = "97c7487fa37e19c27db5c6186ff96635";
-float outTemp = 0.0;
-int outHumidity = 0;
-String weatherCondition = "Loading...";
+struct Settings {
+  String ssid;
+  String password;
+  String city = "Thiruvananthapuram";
+  String accent = "#0484f8";
+  bool hour24 = true;
+  float lat = 8.5241f;
+  float lon = 76.9366f;
+  String timezone = "Asia/Kolkata";
+  int utcOffset = 19800;
+} cfg;
 
-int forecastTemps[3] = {0, 0, 0};
-String forecastConds[3] = {"Clear", "Clear", "Clear"};
-String forecastDays[3] = {"---", "---", "---"};
+struct Weather {
+  float temperature = NAN;
+  float wind = NAN;
+  int code = -1;
+  String dates[3];
+  float highs[3], lows[3];
+  int codes[3];
+  uint32_t lastAttempt = 0;
+  bool ready = false;
+} weather;
 
-const char* ntpServer = "time.google.com";
-const long gmtOffset_sec = 19800; 
-const int daylightOffset_sec = 0;
-bool use24HourFormat = false;
+Preferences prefs;
+WebServer server(80);
+DNSServer dns;
+DHT dht(PIN_DHT, DHT11);
+TFT_eSPI tft;
 
-// UI State Management
-int currentUI = 2; // Boot directly to Robot Eyes
-unsigned long uiTimer = 0; 
-unsigned long lastSlowTick = 0;
-int weatherCounter = 0;
+i2s_chan_handle_t audioChannel = nullptr;
+TaskHandle_t audioTaskHandle = nullptr;
+portMUX_TYPE alarmMux = portMUX_INITIALIZER_UNLOCKED;
 
-// Touch State
-bool ttp1_wasPressed = false;
-unsigned long ttp1_pressTime = 0;
+volatile int activeAlarm = -1;
+volatile int requestedTone = 2;
+volatile uint32_t ringGeneration = 0;
 
-// Robot Eyes Config
-uint16_t currentEyeColor = TFT_WHITE;
-unsigned long lastColorChange = 0;
+bool portal = false;
+bool otaStarted = false;
+bool wifiOnline = false;
+bool forcedPortal = false;
 
-// ==========================================
-// 3. CAPTIVE PORTAL HTML
-// ==========================================
-const char dashboard_html[] PROGMEM = R"rawliteral(
-<!DOCTYPE html>
-<html lang="en">
+uint8_t screenIndex = 0;
+
+uint32_t lastDraw = 0;
+uint32_t lastSensor = 0;
+uint32_t lastWifiAttempt = 0;
+uint32_t lastTouchTransition = 0;
+uint32_t lastShortRelease = 0;
+
+float indoorTemp = NAN;
+float indoorHumidity = NAN;
+
+bool touchWasDown = false;
+bool longHandled = false;
+bool pendingTap = false;
+
+uint32_t snoozeAt = 0;
+int snoozeAlarm = -1;
+
+// ===========================================
+// COLORS AND HELPERS
+// ===========================================
+
+uint16_t accent565() {
+  long rgb = strtol(
+    cfg.accent.substring(1).c_str(),
+    nullptr, 16
+  );
+
+  return tft.color565(
+    (rgb >> 16) & 255,
+    (rgb >> 8) & 255,
+    rgb & 255
+  );
+}
+
+String htmlEscape(String s) {
+  s.replace("&", "&amp;");
+  s.replace("<", "&lt;");
+  s.replace(">", "&gt;");
+  s.replace("\"", "&quot;");
+  s.replace("'", "&#39;");
+  return s;
+}
+
+String urlEncode(const String& s) {
+  const char* hex = "0123456789ABCDEF";
+  String out;
+
+  for (size_t i = 0; i < s.length(); i++) {
+    uint8_t c = (uint8_t)s[i];
+
+    if (isalnum(c) || c == '-' ||
+        c == '_' || c == '.') {
+      out += (char)c;
+    } else {
+      out += '%';
+      out += hex[c >> 4];
+      out += hex[c & 15];
+    }
+  }
+
+  return out;
+}
+
+// ===========================================
+// NON-VOLATILE SETTINGS
+// ===========================================
+
+void saveSettings() {
+  prefs.begin("deskbuddy", false);
+
+  prefs.putString("ssid", cfg.ssid);
+  prefs.putString("pass", cfg.password);
+  prefs.putString("city", cfg.city);
+  prefs.putString("accent", cfg.accent);
+  prefs.putBool("hour24", cfg.hour24);
+  prefs.putFloat("lat", cfg.lat);
+  prefs.putFloat("lon", cfg.lon);
+  prefs.putString("tz", cfg.timezone);
+  prefs.putInt("offset", cfg.utcOffset);
+
+  for (int i = 0; i < 10; i++) {
+    String key = "a" + String(i);
+
+    uint32_t value =
+      (alarms[i].enabled ? 1UL : 0UL) |
+      ((uint32_t)alarms[i].hour << 1) |
+      ((uint32_t)alarms[i].minute << 6) |
+      ((uint32_t)alarms[i].tone << 12);
+
+    prefs.putUInt(key.c_str(), value);
+  }
+
+  prefs.end();
+}
+
+void loadSettings() {
+  prefs.begin("deskbuddy", true);
+
+  cfg.ssid = prefs.getString("ssid", "");
+  cfg.password = prefs.getString("pass", "");
+  cfg.city = prefs.getString("city", cfg.city);
+  cfg.accent = prefs.getString("accent", cfg.accent);
+  cfg.hour24 = prefs.getBool("hour24", true);
+  cfg.lat = prefs.getFloat("lat", cfg.lat);
+  cfg.lon = prefs.getFloat("lon", cfg.lon);
+  cfg.timezone = prefs.getString("tz", cfg.timezone);
+  cfg.utcOffset = prefs.getInt("offset", cfg.utcOffset);
+
+  for (int i = 0; i < 10; i++) {
+    uint32_t value = prefs.getUInt(
+      ("a" + String(i)).c_str(), 0
+    );
+
+    alarms[i].enabled = value & 1;
+    alarms[i].hour = (value >> 1) & 31;
+    alarms[i].minute = (value >> 6) & 63;
+    alarms[i].tone = (value >> 12) & 7;
+
+    if (alarms[i].hour > 23 ||
+        alarms[i].minute > 59 ||
+        alarms[i].tone > 3) {
+      alarms[i] = Alarm();
+    }
+  }
+
+  prefs.end();
+}
+
+// ===========================================
+// DUAL CORE ALARM AUDIO
+// ===========================================
+
+struct Note {
+  uint16_t hz;
+  uint16_t ms;
+};
+
+const Note mario[] = {
+  {659,140}, {659,140}, {0,90},
+  {659,140}, {0,90}, {523,140},
+  {659,140}, {784,280}, {392,260}
+};
+
+const Note zelda[] = {
+  {698,150}, {880,150}, {988,150},
+  {1047,300}, {0,100}, {988,150},
+  {880,150}, {698,320}
+};
+
+const Note starwars[] = {
+  {392,200}, {392,200}, {392,200},
+  {311,150}, {466,70}, {392,200},
+  {311,150}, {466,70}, {392,400}
+};
+
+const Note beep[] = {
+  {880,220}, {0,110},
+  {880,220}, {0,240}
+};
+
+void stopAlarm() {
+  portENTER_CRITICAL(&alarmMux);
+  activeAlarm = -1;
+  ringGeneration++;
+  portEXIT_CRITICAL(&alarmMux);
+}
+
+void startAlarm(int index) {
+  portENTER_CRITICAL(&alarmMux);
+  activeAlarm = index;
+  requestedTone = alarms[index].tone;
+  ringGeneration++;
+  portEXIT_CRITICAL(&alarmMux);
+}
+
+void dismissAlarm() {
+  int index = activeAlarm;
+
+  if (index >= 0) {
+    struct tm now;
+
+    if (getLocalTime(&now, 10)) {
+      alarms[index].lastDay = now.tm_yday;
+    }
+
+    stopAlarm();
+  }
+}
+
+void snooze() {
+  snoozeAlarm = activeAlarm;
+  snoozeAt = millis() + 300000UL;
+  stopAlarm();
+}
+
+void toneSamples(
+  float hz,
+  uint16_t duration,
+  uint32_t generation
+) {
+  constexpr uint32_t rate = 16000;
+
+  int16_t samples[128];
+
+  uint32_t count =
+    (uint32_t)rate * duration / 1000;
+
+  uint32_t phase = 0;
+
+  uint32_t step = hz > 0
+    ? (uint32_t)((hz * 4294967296.0) / rate)
+    : 0;
+
+  for (uint32_t n = 0; n < count; n += 128) {
+    if (generation != ringGeneration ||
+        activeAlarm < 0) return;
+
+    uint32_t frames = min(
+      (uint32_t)128, count - n
+    );
+
+    for (uint32_t i = 0; i < frames; i++) {
+      phase += step;
+
+      float wave = hz > 0
+        ? sinf(
+            (phase / 4294967296.0f) * 6.2831853f
+          )
+        : 0;
+
+      samples[i] = (int16_t)(wave * 8500);
+    }
+
+    size_t written = 0;
+
+    i2s_channel_write(
+      audioChannel,
+      samples,
+      frames * sizeof(int16_t),
+      &written,
+      50
+    );
+  }
+}
+
+void audioTask(void*) {
+  for (;;) {
+    int alarm = activeAlarm;
+
+    if (alarm < 0 || !audioChannel) {
+      digitalWrite(PIN_AMP_SD, LOW);
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
+
+    digitalWrite(PIN_AMP_SD, HIGH);
+
+    const Note* melody = beep;
+    size_t count = sizeof(beep) / sizeof(Note);
+
+    switch (requestedTone) {
+      case 0:
+        melody = mario;
+        count = sizeof(mario) / sizeof(Note);
+        break;
+
+      case 1:
+        melody = zelda;
+        count = sizeof(zelda) / sizeof(Note);
+        break;
+
+      case 3:
+        melody = starwars;
+        count = sizeof(starwars) / sizeof(Note);
+        break;
+    }
+
+    uint32_t generation = ringGeneration;
+
+    for (size_t i = 0;
+         i < count &&
+         generation == ringGeneration &&
+         activeAlarm >= 0;
+         i++) {
+      toneSamples(
+        melody[i].hz,
+        melody[i].ms,
+        generation
+      );
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
+
+void beginAudio() {
+  pinMode(PIN_AMP_SD, OUTPUT);
+  digitalWrite(PIN_AMP_SD, LOW);
+
+  i2s_chan_config_t channelConfig =
+    I2S_CHANNEL_DEFAULT_CONFIG(
+      I2S_NUM_0, I2S_ROLE_MASTER
+    );
+
+  if (i2s_new_channel(
+        &channelConfig,
+        &audioChannel,
+        nullptr
+      ) != ESP_OK) {
+    audioChannel = nullptr;
+    return;
+  }
+
+  i2s_std_config_t config = {
+    .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000),
+    .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(
+      I2S_DATA_BIT_WIDTH_16BIT,
+      I2S_SLOT_MODE_MONO
+    ),
+    .gpio_cfg = {
+      .mclk = I2S_GPIO_UNUSED,
+      .bclk = (gpio_num_t)PIN_I2S_BCLK,
+      .ws = (gpio_num_t)PIN_I2S_LRCK,
+      .dout = (gpio_num_t)PIN_I2S_DOUT,
+      .din = I2S_GPIO_UNUSED,
+      .invert_flags = {false, false, false}
+    }
+  };
+
+  if (i2s_channel_init_std_mode(
+        audioChannel, &config
+      ) != ESP_OK) {
+    i2s_del_channel(audioChannel);
+    audioChannel = nullptr;
+    return;
+  }
+
+  if (i2s_channel_enable(audioChannel) != ESP_OK) {
+    i2s_del_channel(audioChannel);
+    audioChannel = nullptr;
+    return;
+  }
+
+  xTaskCreatePinnedToCore(
+    audioTask,
+    "alarm-audio",
+    4096,
+    nullptr,
+    2,
+    &audioTaskHandle,
+    0
+  );
+}
+
+// ===========================================
+// TFT DISPLAY
+// ===========================================
+
+String timeLabel(uint8_t h, uint8_t m) {
+  char buffer[16];
+
+  int hour = cfg.hour24
+    ? h
+    : ((h + 11) % 12 + 1);
+
+  snprintf(
+    buffer, sizeof(buffer),
+    "%02d:%02d", hour, m
+  );
+
+  String result(buffer);
+
+  if (!cfg.hour24) {
+    result += h >= 12 ? " PM" : " AM";
+  }
+
+  return result;
+}
+
+void drawHeader(const String& title) {
+  tft.fillScreen(TFT_BLACK);
+  tft.fillRect(0, 0, 128, 22, accent565());
+
+  tft.setTextColor(TFT_WHITE, accent565());
+  tft.setTextSize(1);
+  tft.setCursor(7, 7);
+  tft.print(title);
+}
+
+void drawScreens() {
+  int alarm = activeAlarm;
+
+  if (alarm >= 0) {
+    drawHeader("ALARM RINGING");
+
+    tft.setTextSize(2);
+    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+    tft.setCursor(6, 44);
+
+    tft.print(timeLabel(
+      alarms[alarm].hour,
+      alarms[alarm].minute
+    ));
+
+    tft.setTextSize(1);
+    tft.setCursor(5, 105);
+    tft.print("Tap: stop");
+
+    tft.setCursor(5, 119);
+    tft.print("2 taps: snooze");
+
+    tft.setCursor(5, 133);
+    tft.print("Hold: dismiss");
+    return;
+  }
+
+  struct tm now;
+  bool valid = getLocalTime(&now, 2);
+
+  switch (screenIndex) {
+    case 0: {
+      drawHeader("DESK BUDDY");
+
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.setTextSize(2);
+      tft.setCursor(4, 40);
+
+      tft.print(
+        valid
+          ? timeLabel(now.tm_hour, now.tm_min)
+          : "--:--"
+      );
+
+      tft.setTextSize(1);
+      tft.setCursor(5, 80);
+
+      if (valid) {
+        char date[28];
+
+        strftime(
+          date, sizeof(date),
+          "%a %d %b %Y", &now
+        );
+
+        tft.print(date);
+      } else {
+        tft.print("Syncing time...");
+      }
+
+      tft.setCursor(5, 103);
+      tft.printf("Room: %.0f C", indoorTemp);
+
+      tft.setCursor(5, 118);
+      tft.printf(
+        "Humidity: %.0f%%", indoorHumidity
+      );
+
+      tft.setCursor(5, 143);
+      tft.print(
+        wifiOnline ? "WiFi connected" : "Offline"
+      );
+
+      break;
+    }
+
+    case 1: {
+      drawHeader("WEATHER");
+
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.setTextSize(1);
+      tft.setCursor(5, 34);
+      tft.print(cfg.city.substring(0, 20));
+
+      tft.setTextSize(2);
+      tft.setCursor(7, 61);
+
+      if (weather.ready) {
+        tft.printf("%.1f C", weather.temperature);
+      } else {
+        tft.print("-- C");
+      }
+
+      tft.setTextSize(1);
+      tft.setCursor(5, 104);
+
+      if (weather.ready) {
+        tft.printf("Code: %d", weather.code);
+
+        tft.setCursor(5, 122);
+        tft.printf(
+          "Wind: %.0f km/h", weather.wind
+        );
+      }
+
+      break;
+    }
+
+    case 2: {
+      drawHeader("3 DAY FORECAST");
+
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.setTextSize(1);
+
+      for (int i = 0; i < 3; i++) {
+        tft.setCursor(4, 34 + i * 38);
+
+        if (weather.ready) {
+          tft.print(weather.dates[i]);
+
+          tft.setCursor(4, 46 + i * 38);
+
+          tft.printf(
+            "%.0f / %.0f C",
+            weather.highs[i],
+            weather.lows[i]
+          );
+        } else {
+          tft.print("Waiting for WiFi...");
+        }
+      }
+
+      break;
+    }
+
+    case 3: {
+      drawHeader("ALARMS");
+
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.setTextSize(1);
+
+      for (int i = 0; i < 10; i++) {
+        tft.setCursor(3, 25 + i * 13);
+
+        tft.printf(
+          "%02d %s %s",
+          i + 1,
+          timeLabel(
+            alarms[i].hour,
+            alarms[i].minute
+          ).c_str(),
+          alarms[i].enabled ? "ON" : "--"
+        );
+      }
+
+      break;
+    }
+
+    default: {
+      // ROBOT EYES
+      tft.fillScreen(TFT_BLACK);
+
+      tft.fillRoundRect(
+        10, 48, 44, 53, 12, accent565()
+      );
+
+      tft.fillRoundRect(
+        74, 48, 44, 53, 12, accent565()
+      );
+
+      int drift = (millis() / 1600) % 3 - 1;
+
+      tft.fillCircle(
+        32 + drift * 4, 74, 10, TFT_BLACK
+      );
+
+      tft.fillCircle(
+        96 + drift * 4, 74, 10, TFT_BLACK
+      );
+
+      tft.setTextColor(TFT_WHITE, TFT_BLACK);
+      tft.setTextSize(1);
+      tft.setCursor(28, 125);
+      tft.print("HELLO!");
+
+      break;
+    }
+  }
+}
+
+// ===========================================
+// CAPTIVE PORTAL WEB DASHBOARD
+// ===========================================
+
+String portalHtml() {
+  String page = R"HTML(
+<!doctype html>
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Desk_Buddy</title>
-    <style>
-        :root { --bg: #0484f8; --glass: rgba(255, 255, 255, 0.15); --border: rgba(255, 255, 255, 0.3); }
-        body { font-family: -apple-system, system-ui, sans-serif; background-color: var(--bg); color: white; margin: 0; padding: 20px; line-height: 1.6; }
-        h1 { text-align: center; font-size: 2.2em; margin-bottom: 30px; font-weight: 800; letter-spacing: 2px; }
-        h2 { font-size: 1.1em; border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; text-transform: uppercase; color: white;}
-        .container { max-width: 1200px; margin: 0 auto; display: grid; gap: 20px; grid-template-columns: 1fr; }
-        @media (min-width: 800px) { .container { grid-template-columns: 1fr 1fr; } .full-width { grid-column: 1 / -1; } }
-        .panel { background: var(--glass); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border: 1px solid var(--border); border-radius: 16px; padding: 25px; }
-        .telemetry-box { background: rgba(0,0,0,0.2); border-radius: 8px; padding: 15px; text-align: center; font-family: monospace; font-size: 14px; margin-bottom: 20px; border: 1px dashed var(--border); }
-        svg { width: 22px; height: 22px; fill: currentColor; flex-shrink: 0; }
-        label { display: block; font-size: 0.85em; font-weight: 600; text-transform: uppercase; margin-bottom: 8px; }
-        ::placeholder { color: white !important; opacity: 1 !important; font-weight: 500; }
-        input, select { width: 100%; padding: 14px; box-sizing: border-box; background: rgba(0, 0, 0, 0.2); border: 1px solid var(--border); border-radius: 8px; color: white; margin-bottom: 15px; outline: none; }
-        input:focus, select:focus { background: rgba(0, 0, 0, 0.3); border-color: white; }
-        button { width: 100%; padding: 14px; background: white; color: var(--bg); border: none; border-radius: 8px; font-size: 1.1em; font-weight: 700; cursor: pointer; display: flex; justify-content: center; align-items: center; gap: 8px; margin-bottom: 10px; text-transform: uppercase;}
-        button.secondary { background: rgba(0,0,0,0.3); color: white; }
-        button.danger { background: #ef4444; color: white; margin-top: 10px;}
-        .input-group { position: relative; }
-        .input-group svg { position: absolute; right: 14px; top: 14px; cursor: pointer; }
-        #networkList { display: none; background: rgba(0,0,0,0.4); border-radius: 8px; border: 1px solid var(--border); margin-bottom: 15px; max-height: 220px; overflow-y: auto;}
-        .net-item { padding: 14px 15px; cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.1); display: flex; align-items: center; gap: 12px; }
-        .radio-group { display: flex; gap: 10px; margin-bottom: 20px; }
-        .radio-group label { flex: 1; cursor: pointer; position: relative; }
-        .radio-group input { position: absolute; opacity: 0; }
-        .radio-group span { display: block; text-align: center; padding: 14px; background: rgba(0,0,0,0.2); border: 1px solid var(--border); border-radius: 8px; color: white;}
-        .radio-group input:checked + span { background: white; color: var(--bg); font-weight: bold;}
-        .flex-row { display: flex; gap: 15px; } .flex-row > * { flex: 1; margin-bottom: 0; }
-    </style>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Desk Buddy Setup</title>
+<style>
+*{box-sizing:border-box}
+body{
+  margin:0;
+  font:15px system-ui;
+  background:linear-gradient(130deg,#0484f8,#10284e);
+  color:white;
+  min-height:100vh;
+  padding:24px
+}
+main{
+  max-width:650px;
+  margin:auto;
+  background:#ffffff23;
+  border:1px solid #ffffff55;
+  backdrop-filter:blur(20px);
+  border-radius:24px;
+  padding:25px;
+  box-shadow:0 20px 60px #0005
+}
+h1{margin-top:0}
+label{display:block;margin:12px 0 5px}
+input,select{
+  width:100%;
+  padding:12px;
+  background:#ffffffdd;
+  border:0;
+  border-radius:10px;
+  color:#152443
+}
+button{
+  background:#fff;
+  color:#0469c9;
+  font-weight:bold;
+  border:0;
+  border-radius:12px;
+  padding:14px;
+  width:100%;
+  margin-top:20px
+}
+.grid{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:8px
+}
+.alarm{
+  border-top:1px solid #ffffff66;
+  padding:10px 0
+}
+small{opacity:.85}
+</style>
 </head>
 <body>
-<h1>DESK_BUDDY</h1>
-<form id="dashboardForm" action="/save-settings" method="POST">
-<div class="container">
-    <div class="panel">
-        <h2>Network Setup</h2>
-        <div class="telemetry-box" id="telemetry">Fetching Data...</div>
-        <div style="position: relative;">
-            <input type="text" name="ssid" id="ssid" placeholder="Wi-Fi Network" value="__SAVED_SSID__" __SSID_READONLY__ required>
-            <button type="button" id="unlockBtn" onclick="unlockWifi()" style="display: __UNLOCK_BTN_DISPLAY__; position: absolute; right: 6px; top: 6px; width: auto; padding: 8px 14px; font-size: 0.85em; background: rgba(0,0,0,0.5);">EDIT</button>
-        </div>
-        <div id="networkList"></div>
-        <div class="input-group">
-            <input type="password" name="password" id="password" placeholder="Wi-Fi Password" >
-            <svg onclick="togglePassword()" id="eyeIcon" viewBox="0 0 24 24"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
-        </div>
-        <button type="button" class="secondary" id="scanBtn" onclick="scanNetworks()">Scan Wi-Fi</button>
+<main>
+<h1>Desk Buddy</h1>
+<p>Configure your smart desk companion</p>
+<form action="/save" method="post">
+<label>Wi-Fi network</label>
+<select name="ssid">
+<option value="">Choose network</option>
+)HTML";
 
-        <label style="margin-top: 25px;">Location Data</label>
-        <button type="button" class="secondary" onclick="getLocation()">Auto-Fill GPS</button>
-        <input type="text" name="city" placeholder="City Name">
-        <div class="flex-row">
-            <input type="text" name="lat" id="latInput" placeholder="Latitude">
-            <input type="text" name="lon" id="lonInput" placeholder="Longitude">
-        </div>
-    </div>
+  int networks = WiFi.scanNetworks(false, true);
 
-    <div class="panel">
-        <h2>System Setup</h2>
-        <label>Time Format</label>
-        <div class="radio-group">
-            <label><input type="radio" name="time_format" value="12" checked><span>12 HR</span></label>
-            <label><input type="radio" name="time_format" value="24"><span>24 HR</span></label>
-        </div>
-    </div>
+  for (int i = 0; i < networks; i++) {
+    String ssid = WiFi.SSID(i);
 
-    <div class="full-width">
-        <button type="submit">SAVE SETTINGS</button>
-        <button type="button" class="danger" onclick="rebootClock()">REBOOT CLOCK</button>
-    </div>
-</div>
+    page += "<option value=\"" +
+      htmlEscape(ssid) + "\"" +
+      (cfg.ssid == ssid ? " selected" : "") +
+      ">" + htmlEscape(ssid) + "</option>";
+  }
+
+  page += R"HTML(
+</select>
+<label>Wi-Fi password (leave blank to keep saved)</label>
+<input name="password" type="password"
+placeholder="Wi-Fi password">
+)HTML";
+
+  page += "<label>City</label><input name='city' value='" +
+    htmlEscape(cfg.city) + "' required>";
+
+  page += "<label>Time format</label>";
+  page += "<select name='hour24'>";
+
+  page += "<option value='1'" +
+    String(cfg.hour24 ? " selected" : "") +
+    ">24-hour</option>";
+
+  page += "<option value='0'" +
+    String(!cfg.hour24 ? " selected" : "") +
+    ">12-hour</option></select>";
+
+  page += "<label>Accent color</label>";
+  page += "<input type='color' name='accent' value='" +
+    htmlEscape(cfg.accent) + "'>";
+
+  page += "<h2>10 alarms</h2>";
+  page += "<small>Use HH:MM in 24-hour time.</small>";
+
+  for (int i = 0; i < 10; i++) {
+    String key = String(i);
+    char timeString[6];
+
+    snprintf(
+      timeString,
+      sizeof(timeString),
+      "%02u:%02u",
+      alarms[i].hour,
+      alarms[i].minute
+    );
+
+    page += "<div class='alarm'>";
+    page += "<b>Alarm " + String(i + 1) + "</b>";
+    page += "<div class='grid'>";
+
+    page += "<label><input type='checkbox' name='e" +
+      key + "' value='1'" +
+      String(alarms[i].enabled ? " checked" : "") +
+      ">On</label>";
+
+    page += "<input type='time' name='t" + key +
+      "' value='" + String(timeString) +
+      "' style='grid-column:span 2'>";
+
+    page += "<select name='m" + key + "'>";
+
+    for (int j = 0; j < 4; j++) {
+      page += "<option value='" + String(j) + "'" +
+        String(alarms[i].tone == j ? " selected" : "") +
+        ">" + TONES[j] + "</option>";
+    }
+
+    page += "</select></div></div>";
+  }
+
+  page += R"HTML(
+<button type="submit">Save All Settings</button>
 </form>
-
-<script>
-    function unlockWifi() {
-        const ssidInput = document.getElementById('ssid');
-        ssidInput.readOnly = false;
-        ssidInput.style.opacity = '1';
-        ssidInput.style.pointerEvents = 'auto';
-        ssidInput.value = '';
-        document.getElementById('unlockBtn').style.display = 'none';
-    }
-
-    function togglePassword() {
-        const p = document.getElementById("password"); 
-        const e = document.getElementById("eyeIcon");
-        if (p.type === "password") { 
-            p.type = "text"; 
-            e.innerHTML = `<path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.43-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78l3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z"/>`;
-        } else { 
-            p.type = "password"; 
-            e.innerHTML = `<path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>`;
-        }
-    }
-
-    function scanNetworks() {
-        unlockWifi(); 
-        const btn = document.getElementById('scanBtn');
-        const list = document.getElementById('networkList');
-        btn.innerHTML = `Scanning...`;
-        
-        const svgWifi = `<svg viewBox="0 0 24 24" style="width:20px;height:20px;fill:currentColor;"><path d="M12 3C7.8 3 3.7 4.4.4 6.9c-.5.4-.6 1.1-.2 1.6l1.5 1.7c.4.4 1 .5 1.4.1C5.7 8.3 8.8 7.3 12 7.3c3.2 0 6.3 1 8.9 2.9.4.3 1 .2 1.4-.1l1.5-1.7c.4-.5.3-1.2-.2-1.6C20.3 4.4 16.2 3 12 3zm0 5.4c-2.4 0-4.7.7-6.5 2-.4.3-.5 1-.1 1.4l1.5 1.7c.3.4.9.4 1.3.1C9.4 12.6 10.7 12 12 12s2.6.6 3.8 1.5c.4.3 1 .3 1.3-.1l1.5-1.7c.3-.4.3-1.1-.1-1.4-1.8-1.3-4.1-2-6.5-2zm0 5.3c-1 0-1.9.3-2.6.8-.4.3-.4 1-.1 1.3l1.5 1.7c.3.4.9.4 1.3.1.5-.4 1.2-.4 1.7 0 .4.3 1 .2 1.3-.1l1.5-1.7c.4-.4.3-1-.1-1.3-.7-.5-1.6-.8-2.5-.8zm0 5.3c-.8 0-1.5.7-1.5 1.5s.7 1.5 1.5 1.5 1.5-.7 1.5-1.5-.7-1.5-1.5-1.5z"/></svg>`;
-
-        fetch('/scan').then(r => r.json()).then(networks => {
-            list.innerHTML = ""; list.style.display = "block";
-            if(networks.length === 0) {
-                list.innerHTML = "<div class='net-item'>No networks found</div>";
-            } else {
-                let seen = new Set();
-                networks.forEach(net => {
-                    if(!seen.has(net.ssid)) {
-                        seen.add(net.ssid);
-                        let div = document.createElement('div'); div.className = 'net-item'; 
-                        div.innerHTML = svgWifi + " <span style='flex-grow:1; margin-left:10px;'>" + net.ssid + "</span> <span style='color:#9ca3af; font-size:0.85em;'>" + net.rssi + " dBm</span>";
-                        div.onclick = () => { document.getElementById('ssid').value = net.ssid; list.style.display = "none"; };
-                        list.appendChild(div);
-                    }
-                });
-            }
-            btn.innerHTML = `Scan Wi-Fi`;
-        });
-    }
-
-    function getLocation() {
-        if (navigator.geolocation) {
-            navigator.geolocation.getCurrentPosition(
-                pos => { document.getElementById("latInput").value = pos.coords.latitude.toFixed(4); document.getElementById("lonInput").value = pos.coords.longitude.toFixed(4); }, 
-                err => alert("Enable Location Services!")
-            );
-        }
-    }
-
-    document.getElementById('dashboardForm').addEventListener('submit', function(e) {
-        e.preventDefault();
-        fetch('/save-settings', { method: 'POST', body: new URLSearchParams(new FormData(this)) })
-        .then(r => { if(r.ok) { alert("Settings Saved! Clock Rebooting..."); location.reload(); }});
-    });
-
-    function rebootClock() {
-        if (confirm("Restart Desk_Buddy?")) {
-            fetch('/reboot', { method: 'POST' }).then(() => {
-                setTimeout(() => { location.reload(); }, 3000);
-            });
-        }
-    }
-
-    setInterval(() => {
-        fetch('/api/data').then(r => r.json()).then(data => {
-            document.getElementById('telemetry').innerHTML = `CPU: ${data.cpu}MHz | CORE: ${data.temp}&deg;C | SIGNAL: ${data.rssi} dBm`;
-        });
-    }, 5000);
-</script>
+</main>
 </body>
 </html>
-)rawliteral";
+)HTML";
 
-// ==========================================
-// 4. API & SLEEP FUNCTIONS
-// ==========================================
-void fetchWeather() {
-  if (WiFi.status() == WL_CONNECTED) {
-    preferences.begin("clock_prefs", true);
-    String city = preferences.getString("city", "Thiruvananthapuram,IN");
-    String lat = preferences.getString("lat", "");
-    String lon = preferences.getString("lon", "");
-    preferences.end();
-    
-    String baseParams = "";
-    if (lat != "" && lon != "") baseParams = "lat=" + lat + "&lon=" + lon;
-    else baseParams = "q=" + city;
-    baseParams += "&units=metric&appid=" + owmApiKey;
+  return page;
+}
 
-    HTTPClient http;
-    
-    // 1. Fetch Current Weather
-    http.begin("http://api.openweathermap.org/data/2.5/weather?" + baseParams);
-    if (http.GET() == HTTP_CODE_OK) {
-      JsonDocument doc;
-      if (!deserializeJson(doc, http.getString())) {
-        outTemp = doc["main"]["temp"];
-        outHumidity = doc["main"]["humidity"];
-        weatherCondition = doc["weather"][0]["main"].as<String>();
-      }
+bool validColor(const String& color) {
+  if (color.length() != 7 || color[0] != '#') {
+    return false;
+  }
+
+  for (int i = 1; i < 7; i++) {
+    if (!isxdigit((unsigned char)color[i])) {
+      return false;
     }
-    http.end();
-    yield(); // Prevent Watchdog Timer reset
+  }
 
-    // 2. Fetch 3-Day Forecast
-    http.begin("http://api.openweathermap.org/data/2.5/forecast?" + baseParams + "&cnt=26");
-    if (http.GET() == HTTP_CODE_OK) {
-      JsonDocument filter;
-      filter["list"][0]["main"]["temp"] = true;
-      filter["list"][0]["weather"][0]["main"] = true;
-      filter["list"][0]["dt"] = true;
+  return true;
+}
 
-      JsonDocument doc;
-      DeserializationError error = deserializeJson(doc, http.getStream(), DeserializationOption::Filter(filter));
-      
-      if (!error) {
-        JsonArray list = doc["list"];
-        int indices[3] = {8, 16, 24}; 
-        
-        for(int i = 0; i < 3; i++) {
-          if(list.size() > indices[i]) {
-            forecastTemps[i] = list[indices[i]]["main"]["temp"];
-            forecastConds[i] = list[indices[i]]["weather"][0]["main"].as<String>();
-            long dt = list[indices[i]]["dt"];
-            
-            time_t t = dt + gmtOffset_sec;
-            struct tm *ptm = gmtime(&t);
-            char dayStr[4];
-            strftime(dayStr, 4, "%a", ptm);
-            String d = String(dayStr);
-            d.toUpperCase();
-            forecastDays[i] = d;
-          }
-        }
-      }
+void handleSave() {
+  String ssid = server.arg("ssid");
+  String city = server.arg("city");
+  String color = server.arg("accent");
+
+  if (
+    ssid.isEmpty() ||
+    city.isEmpty() ||
+    city.length() > 80 ||
+    !validColor(color)
+  ) {
+    server.send(
+      400,
+      "text/plain",
+      "Select Wi-Fi, enter city and valid color."
+    );
+    return;
+  }
+
+  cfg.ssid = ssid;
+
+  if (
+    server.hasArg("password") &&
+    !server.arg("password").isEmpty()
+  ) {
+    cfg.password = server.arg("password");
+  }
+
+  cfg.city = city;
+  cfg.accent = color;
+  cfg.hour24 = server.arg("hour24") == "1";
+
+  for (int i = 0; i < 10; i++) {
+    String key = String(i);
+    String timeString = server.arg("t" + key);
+
+    int hour = -1;
+    int minute = -1;
+
+    if (
+      sscanf(
+        timeString.c_str(),
+        "%d:%d",
+        &hour,
+        &minute
+      ) != 2 ||
+      hour < 0 || hour > 23 ||
+      minute < 0 || minute > 59
+    ) {
+      server.send(
+        400, "text/plain",
+        "Invalid alarm time."
+      );
+      return;
     }
-    http.end();
+
+    alarms[i].hour = hour;
+    alarms[i].minute = minute;
+    alarms[i].enabled = server.hasArg("e" + key);
+
+    alarms[i].tone = constrain(
+      server.arg("m" + key).toInt(), 0, 3
+    );
   }
+
+  saveSettings();
+
+  server.send(
+    200,
+    "text/html",
+    "<h2>Saved! Desk Buddy is restarting.</h2>"
+  );
+
+  delay(600);
+  ESP.restart();
 }
 
-void goToSleep() {
-  // 1. Draw Sleep Message
-  spr.fillSprite(TFT_BLACK);
-  spr.setTextColor(BRAND_BLUE, TFT_BLACK);
-  spr.setTextFont(4);
-  spr.setTextDatum(MC_DATUM);
-  spr.drawString("GOING TO", 64, 50);
-  spr.drawString("SLEEP", 64, 80);
-  spr.pushSprite(0, 0); 
-  
-  // 2. Hold message on screen briefly
-  delay(1500);
+void startPortal() {
+  portal = true;
+  wifiOnline = false;
 
-  // 3. Hardware Sleep (TFT Internal Driver)
-  tft.writecommand(0x10); // Sleep In
-  delay(10);
-  tft.writecommand(0x28); // Display Off
-
-  // 4. Cut Backlight Power (BC558 PNP Logic: HIGH = OFF)
-  digitalWrite(SLEEP_LED_PIN, HIGH); 
-  gpio_hold_en((gpio_num_t)SLEEP_LED_PIN);
-
-  // 5. Cut DHT11 Power
-  digitalWrite(DHT_PWR_PIN, LOW);
-  gpio_hold_en((gpio_num_t)DHT_PWR_PIN);
-
-  // 6. Enter Deep Sleep on ESP32-C3
-  esp_deep_sleep_enable_gpio_wakeup(1ULL << TOUCH_1, ESP_GPIO_WAKEUP_GPIO_HIGH);
-  esp_deep_sleep_start();
-}
-
-// ==========================================
-// 5. UI DRAWING
-// ==========================================
-void drawWeatherIcon(int cx, int cy, String condition) {
-  condition.toLowerCase(); 
-  if (condition == "clear") spr.fillCircle(cx, cy, 10, COLOR_SUN);
-  else if (condition == "clouds") {
-    spr.fillCircle(cx - 6, cy + 2, 6, COLOR_CLOUD); spr.fillCircle(cx + 2, cy - 4, 8, COLOR_CLOUD);
-    spr.fillCircle(cx + 9, cy + 2, 6, COLOR_CLOUD); spr.fillRect(cx - 6, cy - 1, 15, 9, COLOR_CLOUD); 
-  }
-  else if (condition == "rain" || condition == "drizzle") {
-    spr.fillCircle(cx - 6, cy + 2, 6, COLOR_CLOUD); spr.fillCircle(cx + 2, cy - 4, 8, COLOR_CLOUD);
-    spr.fillCircle(cx + 9, cy + 2, 6, COLOR_CLOUD); spr.fillRect(cx - 6, cy - 1, 15, 9, COLOR_CLOUD);
-    spr.drawLine(cx - 4, cy + 8, cx - 7, cy + 14, COLOR_RAIN); spr.drawLine(cx + 2, cy + 8, cx - 1,  cy + 14, COLOR_RAIN);
-    spr.drawLine(cx + 8, cy + 8, cx + 5, cy + 14, COLOR_RAIN);
-  }
-  else if (condition == "thunderstorm") {
-    spr.fillCircle(cx - 6, cy + 2, 6, COLOR_CLOUD); spr.fillCircle(cx + 2, cy - 4, 8, COLOR_CLOUD);
-    spr.fillCircle(cx + 9, cy + 2, 6, COLOR_CLOUD); spr.fillRect(cx - 6, cy - 1, 15, 9, COLOR_CLOUD);
-    spr.fillTriangle(cx + 1, cy + 4, cx + 5, cy + 4, cx - 1, cy + 10, COLOR_SUN);
-    spr.fillTriangle(cx + 0, cy + 9, cx + 4, cy + 9, cx - 2, cy + 15, COLOR_SUN);
-  }
-  else {
-    spr.fillCircle(cx - 4, cy - 4, 8, COLOR_SUN); spr.fillCircle(cx + 3, cy + 3, 7, TFT_WHITE);
-    spr.fillCircle(cx + 10, cy + 3, 5, TFT_WHITE); spr.fillRect(cx + 3, cy, 7, 10, TFT_WHITE);
-  }
-}
-
-void drawSmallWeatherIcon(int cx, int cy, String condition) {
-  condition.toLowerCase();
-  if (condition == "clear") spr.fillCircle(cx, cy, 6, COLOR_SUN);
-  else if (condition == "clouds") {
-      spr.fillCircle(cx - 4, cy + 1, 4, COLOR_CLOUD); spr.fillCircle(cx + 1, cy - 3, 5, COLOR_CLOUD);
-      spr.fillCircle(cx + 6, cy + 1, 4, COLOR_CLOUD); spr.fillRect(cx - 4, cy - 1, 10, 6, COLOR_CLOUD);
-  }
-  else if (condition == "rain" || condition == "drizzle") {
-      spr.fillCircle(cx - 4, cy + 1, 4, COLOR_CLOUD); spr.fillCircle(cx + 1, cy - 3, 5, COLOR_CLOUD);
-      spr.fillCircle(cx + 6, cy + 1, 4, COLOR_CLOUD); spr.fillRect(cx - 4, cy - 1, 10, 6, COLOR_CLOUD);
-      spr.drawLine(cx - 3, cy + 5, cx - 5, cy + 9, COLOR_RAIN); spr.drawLine(cx + 1, cy + 5, cx - 1, cy + 9, COLOR_RAIN);
-      spr.drawLine(cx + 5, cy + 5, cx + 3, cy + 9, COLOR_RAIN);
-  }
-  else if (condition == "thunderstorm") {
-      spr.fillCircle(cx - 4, cy + 1, 4, COLOR_CLOUD); spr.fillCircle(cx + 1, cy - 3, 5, COLOR_CLOUD);
-      spr.fillCircle(cx + 6, cy + 1, 4, COLOR_CLOUD); spr.fillRect(cx - 4, cy - 1, 10, 6, COLOR_CLOUD);
-      spr.fillTriangle(cx + 1, cy + 3, cx + 4, cy + 3, cx - 1, cy + 8, COLOR_SUN);
-      spr.fillTriangle(cx + 0, cy + 7, cx + 3, cy + 7, cx - 2, cy + 12, COLOR_SUN);
-  }
-  else {
-      spr.fillCircle(cx - 3, cy - 3, 5, COLOR_SUN); spr.fillCircle(cx + 2, cy + 2, 4, TFT_WHITE);
-      spr.fillCircle(cx + 7, cy + 2, 3, TFT_WHITE); spr.fillRect(cx + 2, cy, 5, 6, TFT_WHITE);
-  }
-}
-
-void drawMainUI() {
-  spr.fillSprite(TFT_BLACK); 
-  
-  spr.drawLine(0, 36, 128, 36, tft.color565(50, 50, 50)); 
-  spr.drawLine(74, 36, 74, 160, tft.color565(50, 50, 50));
-  
-  int wifiX = 12, wifiY = 17;
-  spr.fillCircle(wifiX, wifiY, 1, BRAND_BLUE); spr.drawCircle(wifiX, wifiY, 4, BRAND_BLUE);
-  spr.drawCircle(wifiX, wifiY, 8, BRAND_BLUE); spr.fillRect(wifiX - 9, wifiY + 1, 19, 9, TFT_BLACK);
-
-  spr.setTextFont(2);
-  spr.setTextColor(BRAND_BLUE, TFT_BLACK);
-  spr.setTextDatum(TL_DATUM); 
-
-  spr.drawString(String(WiFi.RSSI()) + "dB", 24, 4);
-  
-  if (isnan(inTemp)) spr.drawString("ERR", 75, 4);
-  else spr.drawString("IN:" + String((int)inTemp) + "C", 75, 4);
-
-  if (isnan(inHum)) spr.drawString(" ", 24, 20);
-  else spr.drawString("H:" + String((int)inHum) + "%", 24, 20);
-
-  spr.drawString("CPU:" + String(currentCpuFreq), 75, 20);
-
-  struct tm timeinfo;
-  if (getLocalTime(&timeinfo)) {
-    char hourStr[3]; char minStr[3];
-    if (use24HourFormat) strftime(hourStr, sizeof(hourStr), "%H", &timeinfo);
-    else strftime(hourStr, sizeof(hourStr), "%I", &timeinfo);
-    strftime(minStr, sizeof(minStr), "%M", &timeinfo);
-
-    spr.setTextFont(4); 
-    spr.setTextDatum(MC_DATUM); 
-    
-    spr.drawString(hourStr, 37, 75); 
-    spr.drawString(minStr, 37, 105);
-  }
-
-  spr.setTextDatum(MC_DATUM); 
-  drawSmallWeatherIcon(101, 54, weatherCondition); 
-
-  spr.setTextFont(2); 
-  spr.drawString(String((int)outTemp) + "C", 101, 78);
-  
-  String cond = weatherCondition;
-  if (cond.length() > 7) {
-    spr.drawString(cond.substring(0, 6), 101, 105); 
-    spr.drawString(cond.substring(6), 101, 120); 
-  } else {
-    spr.drawString(cond, 101, 110); 
-  }
-
-  spr.pushSprite(0, 0); 
-}
-
-void drawNestWeatherUI() {
-  spr.fillSprite(tft.color565(20, 20, 25)); 
-  
-  spr.setTextColor(BRAND_BLUE); 
-  spr.setTextFont(2);
-  spr.setTextDatum(TC_DATUM);
-  spr.drawString("TODAY", 64, 15); 
-  
-  drawWeatherIcon(64, 52, weatherCondition); 
-  
-  spr.setTextColor(TFT_WHITE, tft.color565(20, 20, 25)); 
-  spr.setTextFont(4);
-  spr.setTextDatum(MC_DATUM); 
-  spr.drawString(String((int)outTemp) + "C", 64, 90); 
-  
-  String displayCond = weatherCondition; 
-  displayCond[0] = toupper(displayCond[0]);
-  
-  spr.setTextColor(BRAND_BLUE, tft.color565(20, 20, 25)); 
-  spr.setTextFont(2);
-  spr.drawString(displayCond, 64, 115); 
-
-  int dropX = 35;
-  int dropY = 140;
-  int r = 4;
-  spr.fillCircle(dropX, dropY, r, COLOR_RAIN);
-  spr.fillTriangle(dropX - r, dropY, dropX + r, dropY, dropX, dropY - r - 5, COLOR_RAIN);
-  
-  spr.setTextColor(TFT_WHITE, tft.color565(20, 20, 25)); 
-  spr.setTextFont(2);
-  spr.setTextDatum(ML_DATUM);
-  spr.drawString("HUM " + String(outHumidity) + "%", dropX + 12, dropY - 2);
-
-  spr.pushSprite(0, 0); 
-}
-
-void drawForecastUI() {
-  spr.fillSprite(tft.color565(20, 20, 25)); 
-  
-  spr.setTextColor(BRAND_BLUE); 
-  spr.setTextFont(2);
-  spr.setTextDatum(TC_DATUM);
-  spr.drawString("FORECAST", 64, 15); 
-
-  for(int i = 0; i < 3; i++) {
-    int yBase = 50 + (i * 35); 
-    
-    spr.setTextColor(TFT_WHITE, tft.color565(20, 20, 25));
-    spr.setTextDatum(ML_DATUM);
-    spr.drawString(forecastDays[i], 15, yBase);
-
-    drawSmallWeatherIcon(64, yBase, forecastConds[i]);
-
-    spr.setTextDatum(MR_DATUM);
-    spr.drawString(String(forecastTemps[i]) + "C", 113, yBase);
-  }
-
-  spr.pushSprite(0, 0); 
-}
-
-void drawRobotEyes() {
-  spr.fillSprite(TFT_BLACK); 
-  
-  if (millis() - lastColorChange > 1000) {
-      lastColorChange = millis();
-      uint16_t allowedColors[] = { TFT_BLUE, TFT_RED, TFT_GREEN, TFT_PURPLE, TFT_VIOLET };
-      int randomIndex = random(0, 5); 
-      currentEyeColor = allowedColors[randomIndex];
-  }
-  
-  spr.fillCircle(34, 80, 18, currentEyeColor); 
-  spr.fillCircle(94, 80, 18, currentEyeColor);
-
-  int moveX = sin(millis() / 400.0) * 8; 
-  int moveY = cos(millis() / 300.0) * 6;  
-  
-  spr.fillCircle(34 + moveX, 80 + moveY, 8, TFT_BLACK); 
-  spr.fillCircle(94 + moveX, 80 + moveY, 8, TFT_BLACK);
-  
-  spr.pushSprite(0, 0); 
-}
-
-// ==========================================
-// 6. SETUP & MAIN LOOP
-// ==========================================
-void setup() {
-  Serial.begin(115200);
-  setCpuFrequencyMhz(160); // Set C3 to max performance
-
-  // Wakeup pin config
-  pinMode(TOUCH_1, INPUT_PULLDOWN); 
-  
-  // Power up TFT Backlight via BC558 (LOW = ON)
-  pinMode(SLEEP_LED_PIN, OUTPUT);
-  gpio_hold_dis((gpio_num_t)SLEEP_LED_PIN);
-  digitalWrite(SLEEP_LED_PIN, LOW); 
-
-  // Power up DHT11 dynamically
-  pinMode(DHT_PWR_PIN, OUTPUT);
-  gpio_hold_dis((gpio_num_t)DHT_PWR_PIN);
-  digitalWrite(DHT_PWR_PIN, HIGH);
-  delay(100); // Sensor boot time
-  dht.begin(); 
-
-  // Init TFT Screen
-  tft.init(); 
-  tft.setRotation(0); 
-  spr.createSprite(128, 160); 
-
-  // Loading Screen
-  spr.fillSprite(TFT_BLACK);
-  spr.setTextColor(BRAND_BLUE);
-  spr.setTextFont(4);
-  spr.setTextDatum(MC_DATUM);
-  spr.drawString("DESK", 64, 50);
-  spr.drawString("BUDDY", 64, 75);
-  spr.setTextFont(2);
-  spr.drawString("STARTING", 64, 105);
-  spr.pushSprite(0, 0); 
-
-  // Load Saved Preferences
-  preferences.begin("clock_prefs", true);
-  String ssid = preferences.getString("ssid", "");
-  String pass = preferences.getString("password", "");
-  use24HourFormat = (preferences.getString("time_format", "12") == "24");
-  preferences.end();
-
-  // AP Config for Captive Portal
   WiFi.mode(WIFI_AP_STA);
-  IPAddress apIP(192, 168, 4, 1);
-  WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
-  WiFi.softAP("Desk_Buddy", "C3_Zero@1234");
-  dnsServer.start(53, "*", apIP); 
+  WiFi.softAP(AP_SSID, AP_PASSWORD);
 
-  if (ssid != "") {
-    WiFi.begin(ssid.c_str(), pass.c_str());
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) { 
-      delay(500); 
-      attempts++; 
-    }
-  }
+  dns.start(
+    53, "*", WiFi.softAPIP()
+  );
 
-  // OTA Updates
-  ArduinoOTA.setHostname("DeskBuddy-OTA");
-  ArduinoOTA.setPassword("admin123");
-  ArduinoOTA.begin();
-
-  if (WiFi.status() != WL_CONNECTED) {
-    isConfigMode = true; 
-  } else {
-    isConfigMode = false; 
-    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
-    fetchWeather(); 
-  }
-
-  // --- Web Server Setup ---
-  server.on("/", HTTP_GET, [ssid]() {
-    String html = dashboard_html;
-    html.replace("__SAVED_SSID__", ssid);
-    if(ssid != "") {
-        html.replace("__SSID_READONLY__", "readonly style='opacity: 0.6; pointer-events: none;'");
-        html.replace("__UNLOCK_BTN_DISPLAY__", "inline-block");
-    } else {
-        html.replace("__SSID_READONLY__", "");
-        html.replace("__UNLOCK_BTN_DISPLAY__", "none");
-    }
-    server.send(200, "text/html", html);
-  });
-  
-  server.on("/scan", HTTP_GET, []() {
-    int n = WiFi.scanNetworks(); 
-    String json = "[";
-    for (int i = 0; i < n; ++i) { 
-      if (i > 0) json += ","; 
-      json += "{\"ssid\":\"" + WiFi.SSID(i) + "\",\"rssi\":" + String(WiFi.RSSI(i)) + "}"; 
-    }
-    json += "]"; 
-    WiFi.scanDelete(); 
-    server.send(200, "application/json", json);
+  server.on("/", HTTP_GET, []() {
+    server.send(
+      200, "text/html", portalHtml()
+    );
   });
 
-  server.on("/api/data", HTTP_GET, []() {
-    String json = "{\"cpu\":" + String(currentCpuFreq) + ",\"temp\":" + String(currentChipTemp, 1) + ",\"rssi\":" + String(WiFi.RSSI()) + "}";
-    server.send(200, "application/json", json);
+  server.on("/save", HTTP_POST, handleSave);
+
+  server.on("/generate_204", HTTP_GET, []() {
+    server.sendHeader("Location", "/", true);
+    server.send(302, "text/plain", "");
   });
 
-  server.on("/save-settings", HTTP_POST, []() {
-    preferences.begin("clock_prefs", false);
-    if(server.hasArg("ssid")) preferences.putString("ssid", server.arg("ssid"));
-    if(server.hasArg("password") && server.arg("password").length() > 0) preferences.putString("password", server.arg("password"));
-    if(server.hasArg("time_format")) preferences.putString("time_format", server.arg("time_format"));
-    if(server.hasArg("lat")) preferences.putString("lat", server.arg("lat"));
-    if(server.hasArg("lon")) preferences.putString("lon", server.arg("lon"));
-    if(server.hasArg("city")) preferences.putString("city", server.arg("city"));
-    preferences.end();
-    server.send(200, "text/plain", "OK");
-    delay(1000); ESP.restart();
-  });
-
-  server.on("/reboot", HTTP_POST, []() {
-    server.send(200, "text/plain", "Rebooting");
-    delay(1000); ESP.restart(); 
+  server.on("/hotspot-detect.html", HTTP_GET, []() {
+    server.sendHeader("Location", "/", true);
+    server.send(302, "text/plain", "");
   });
 
   server.onNotFound([]() {
-    server.sendHeader("Location", "http://192.168.4.1/", true);
+    server.sendHeader(
+      "Location", "http://192.168.4.1/", true
+    );
     server.send(302, "text/plain", "");
   });
 
   server.begin();
 }
 
-void loop() { 
-  unsigned long currentMillis = millis();
+// ===========================================
+// NETWORK + OPEN-METEO WEATHER
+// ===========================================
 
-  // 1. Process Network Clients
-  dnsServer.processNextRequest();
-  server.handleClient(); 
-  ArduinoOTA.handle(); 
+void connectWifi() {
+  if (cfg.ssid.isEmpty()) return;
 
-  // 2. Sensor Polling & Throttling (Every 5 seconds)
-  if (currentMillis - lastSlowTick > 5000) {
-    lastSlowTick = currentMillis;
-    currentChipTemp = temperatureRead();
-    currentCpuFreq = getCpuFrequencyMhz();
+  WiFi.mode(WIFI_STA);
 
-    inTemp = dht.readTemperature();
-    inHum = dht.readHumidity();
+  WiFi.begin(
+    cfg.ssid.c_str(),
+    cfg.password.c_str()
+  );
 
-    if (currentChipTemp >= 70.0) {
-        Serial.println("CRITICAL: 70C EXCEEDED. SLEEP.");
-        goToSleep(); 
-    }
-    // Throttle step down to 80MHz on C3
-    else if (currentChipTemp > 65.0 && currentCpuFreq == 160) { 
-        setCpuFrequencyMhz(80); 
-        isThrottled = true; 
-    } 
-    else if (currentChipTemp < 52.0 && currentCpuFreq == 80) { 
-        setCpuFrequencyMhz(160); 
-        isThrottled = false; 
-    }
+  lastWifiAttempt = millis();
+}
 
-    // Weather Polling (Every 3 mins)
-    weatherCounter++;
-    if (weatherCounter >= 36 && !isConfigMode) { 
-        fetchWeather(); 
-        weatherCounter = 0; 
+bool getJson(
+  const String& url,
+  JsonDocument& doc
+) {
+  WiFiClientSecure client;
+
+  // Prototype only: replace with CA verification
+  // before deploying to an untrusted network.
+  client.setInsecure();
+
+  HTTPClient http;
+  http.setTimeout(6500);
+
+  if (!http.begin(client, url)) {
+    return false;
+  }
+
+  int status = http.GET();
+
+  bool success =
+    status == HTTP_CODE_OK &&
+    deserializeJson(
+      doc, http.getStream()
+    ) == DeserializationError::Ok;
+
+  http.end();
+  return success;
+}
+
+void fetchWeather() {
+  if (!wifiOnline) return;
+
+  weather.lastAttempt = millis();
+
+  JsonDocument geo;
+
+  String geocodeUrl =
+    "https://geocoding-api.open-meteo.com/v1/search?name=" +
+    urlEncode(cfg.city) + "&count=1";
+
+  if (
+    getJson(geocodeUrl, geo) &&
+    geo["results"].is<JsonArray>() &&
+    !geo["results"].as<JsonArray>().isEmpty()
+  ) {
+    JsonObject place = geo["results"][0];
+
+    cfg.lat = place["latitude"] | cfg.lat;
+    cfg.lon = place["longitude"] | cfg.lon;
+
+    cfg.timezone =
+      (const char*)(place["timezone"] | "Asia/Kolkata");
+  }
+
+  JsonDocument doc;
+
+  String forecastUrl =
+    "https://api.open-meteo.com/v1/forecast?latitude=" +
+    String(cfg.lat, 5) +
+    "&longitude=" +
+    String(cfg.lon, 5) +
+    "&current=temperature_2m,weather_code,wind_speed_10m" +
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min" +
+    "&forecast_days=3&timezone=auto";
+
+  if (!getJson(forecastUrl, doc)) {
+    return;
+  }
+
+  cfg.utcOffset =
+    doc["utc_offset_seconds"] | cfg.utcOffset;
+
+  configTime(
+    cfg.utcOffset, 0,
+    NTP_SERVER, "time.google.com"
+  );
+
+  weather.temperature =
+    doc["current"]["temperature_2m"] | NAN;
+
+  weather.code =
+    doc["current"]["weather_code"] | -1;
+
+  weather.wind =
+    doc["current"]["wind_speed_10m"] | NAN;
+
+  for (int i = 0; i < 3; i++) {
+    weather.dates[i] = String(
+      (const char*)(
+        doc["daily"]["time"][i] | "---"
+      )
+    );
+
+    weather.highs[i] =
+      doc["daily"]["temperature_2m_max"][i] | NAN;
+
+    weather.lows[i] =
+      doc["daily"]["temperature_2m_min"][i] | NAN;
+
+    weather.codes[i] =
+      doc["daily"]["weather_code"][i] | -1;
+  }
+
+  weather.ready = true;
+  saveSettings();
+}
+
+// ===========================================
+// SLEEP + TOUCH CONTROLS
+// ===========================================
+
+void enterSleep() {
+  stopAlarm();
+
+  digitalWrite(PIN_AMP_SD, LOW);
+
+  // ST7735 display OFF command
+  tft.writecommand(0x28);
+
+  digitalWrite(PIN_LED, HIGH);
+
+  gpio_hold_en((gpio_num_t)PIN_LED);
+  gpio_deep_sleep_hold_en();
+
+  // TTP223 active-HIGH touch wake
+  esp_sleep_enable_ext1_wakeup(
+    1ULL << PIN_TOUCH,
+    ESP_EXT1_WAKEUP_ANY_HIGH
+  );
+
+  esp_deep_sleep_start();
+}
+
+void onTap() {
+  if (activeAlarm >= 0) {
+    stopAlarm();
+    return;
+  }
+
+  screenIndex = (screenIndex + 1) % 5;
+  lastDraw = 0;
+}
+
+void onDouble() {
+  if (activeAlarm >= 0) {
+    snooze();
+    return;
+  }
+
+  prefs.begin("deskbuddy", false);
+  prefs.putBool("setup", true);
+  prefs.end();
+
+  ESP.restart();
+}
+
+void onHold() {
+  if (activeAlarm >= 0) {
+    dismissAlarm();
+  } else {
+    enterSleep();
+  }
+}
+
+void handleTouch() {
+  bool pressed = digitalRead(PIN_TOUCH) == HIGH;
+  uint32_t now = millis();
+
+  if (
+    pressed != touchWasDown &&
+    now - lastTouchTransition >= TOUCH_DEBOUNCE
+  ) {
+    touchWasDown = pressed;
+    lastTouchTransition = now;
+
+    if (pressed) {
+      longHandled = false;
+    } else if (!longHandled) {
+      if (
+        pendingTap &&
+        now - lastShortRelease < DOUBLE_TAP_MS
+      ) {
+        pendingTap = false;
+        onDouble();
+      } else {
+        pendingTap = true;
+        lastShortRelease = now;
+      }
     }
   }
 
-  // 3. Touch Pad Logic
-  bool ttp1_isPressed = digitalRead(TOUCH_1) == HIGH;
-  if (ttp1_isPressed && !ttp1_wasPressed) { 
-    ttp1_pressTime = currentMillis; 
-    ttp1_wasPressed = true;
-  } else if (!ttp1_isPressed && ttp1_wasPressed) { 
-    ttp1_wasPressed = false;
-    long pressDuration = currentMillis - ttp1_pressTime;
-    
-    if (pressDuration > 600) {
-      goToSleep(); 
-    } 
-    else if (pressDuration > 50) { 
-      if (currentUI == 0) currentUI = 1;
-      else if (currentUI == 1) currentUI = 3;
-      else if (currentUI == 3) currentUI = 2;
-      else if (currentUI == 2) currentUI = 0;
-      
-      uiTimer = currentMillis; 
+  if (
+    pressed &&
+    !longHandled &&
+    now - lastTouchTransition >= LONG_PRESS_MS
+  ) {
+    longHandled = true;
+    pendingTap = false;
+    onHold();
+  }
+
+  if (
+    pendingTap &&
+    now - lastShortRelease >= DOUBLE_TAP_MS
+  ) {
+    pendingTap = false;
+    onTap();
+  }
+}
+
+// ===========================================
+// ALARM SCHEDULER
+// ===========================================
+
+void checkAlarms() {
+  if (portal || activeAlarm >= 0) return;
+
+  if (
+    snoozeAlarm >= 0 &&
+    (int32_t)(millis() - snoozeAt) >= 0
+  ) {
+    int index = snoozeAlarm;
+    snoozeAlarm = -1;
+    startAlarm(index);
+    return;
+  }
+
+  struct tm now;
+
+  if (!getLocalTime(&now, 2)) return;
+
+  for (int i = 0; i < 10; i++) {
+    if (
+      alarms[i].enabled &&
+      alarms[i].hour == now.tm_hour &&
+      alarms[i].minute == now.tm_min &&
+      alarms[i].lastDay != now.tm_yday
+    ) {
+      alarms[i].lastDay = now.tm_yday;
+      startAlarm(i);
+      break;
+    }
+  }
+}
+
+// ===========================================
+// THERMAL PROTECTION
+// ===========================================
+
+void checkThermal() {
+  // Internal chip temperature, not DHT11 room temp.
+  float temperature = temperatureRead();
+
+  if (!isfinite(temperature)) return;
+
+  if (temperature >= 70) {
+    enterSleep();
+    return;
+  }
+
+  static bool throttled = false;
+
+  if (temperature >= 65 && !throttled) {
+    setCpuFrequencyMhz(80);
+    throttled = true;
+  }
+
+  if (temperature <= 52 && throttled) {
+    setCpuFrequencyMhz(240);
+    throttled = false;
+  }
+}
+
+// ===========================================
+// SETUP
+// ===========================================
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(PIN_LED, OUTPUT);
+  digitalWrite(PIN_LED, HIGH);
+
+  pinMode(PIN_TOUCH, INPUT);
+
+  touchWasDown =
+    digitalRead(PIN_TOUCH) == HIGH;
+
+  gpio_hold_dis((gpio_num_t)PIN_LED);
+
+  tft.init();
+  tft.setRotation(0);
+  tft.fillScreen(TFT_BLACK);
+
+  dht.begin();
+
+  loadSettings();
+  beginAudio();
+
+  prefs.begin("deskbuddy", false);
+
+  forcedPortal =
+    prefs.getBool("setup", false);
+
+  prefs.putBool("setup", false);
+  prefs.end();
+
+  if (cfg.ssid.isEmpty() || forcedPortal) {
+    startPortal();
+  } else {
+    connectWifi();
+  }
+
+  drawScreens();
+}
+
+// ===========================================
+// MAIN LOOP - CORE 1
+// ===========================================
+
+void loop() {
+  handleTouch();
+
+  uint32_t now = millis();
+
+  if (portal) {
+    dns.processNextRequest();
+    server.handleClient();
+  } else {
+    bool online =
+      WiFi.status() == WL_CONNECTED;
+
+    if (online && !wifiOnline) {
+      wifiOnline = true;
+
+      configTime(
+        cfg.utcOffset, 0,
+        NTP_SERVER, "time.google.com"
+      );
+
+      ArduinoOTA.setHostname("Desk_Buddy");
+      ArduinoOTA.begin();
+
+      otaStarted = true;
+
+      weather.lastAttempt = now - 1800001UL;
+    }
+
+    if (!online && wifiOnline) {
+      wifiOnline = false;
+      otaStarted = false;
+    }
+
+    if (
+      !online &&
+      now - lastWifiAttempt > 20000
+    ) {
+      WiFi.reconnect();
+      lastWifiAttempt = now;
+    }
+
+    if (otaStarted && online) {
+      ArduinoOTA.handle();
+    }
+
+    checkAlarms();
+
+    if (
+      online &&
+      (!weather.ready ||
+       now - weather.lastAttempt > 1800000UL) &&
+      now - weather.lastAttempt > 10000
+    ) {
+      fetchWeather();
     }
   }
 
-  // Auto return to Main UI if viewing Weather (1) or Forecast (3) for > 8 seconds
-  if ((currentUI == 1 || currentUI == 3) && (currentMillis - uiTimer > 8000)) {
-      currentUI = 0;
+  if (now - lastSensor > 3000) {
+    lastSensor = now;
+
+    float temperature = dht.readTemperature();
+    float humidity = dht.readHumidity();
+
+    if (isfinite(temperature)) {
+      indoorTemp = temperature;
+    }
+
+    if (isfinite(humidity)) {
+      indoorHumidity = humidity;
+    }
+
+    checkThermal();
   }
 
-  // 4. Draw UI
-  if (currentUI == 0) drawMainUI(); 
-  else if (currentUI == 1) drawNestWeatherUI();
-  else if (currentUI == 2) drawRobotEyes();
-  else if (currentUI == 3) drawForecastUI();
+  if (now - lastDraw > 350) {
+    lastDraw = now;
+    drawScreens();
+  }
 
-  // Yield to RTOS Watchdog
-  delay(isThrottled ? 33 : 16); 
+  // Cooperative yield; alarm audio runs on Core 0.
+  delay(3);
 }
