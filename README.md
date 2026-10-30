@@ -1,5 +1,8 @@
 # Desk Buddy
 
+> **Development notice (30 October 2026):** An independent, unmerged **beta v2 rebuild** adds `Desk_Buddy-XXXX` hotspot names, an optional saved OpenWeatherMap API key, three-day weather forecasts with Open-Meteo fallback, a buffered TFT renderer to reduce flicker, and smoother blinking robot-eye animation. See the [beta firmware and full feature documentation](https://github.com/Robonavigators/Desk_Buddy/blob/rebuild/readme-firmware-v2/README.md). **The original root firmware is unchanged**, and the beta has not been compile- or hardware-verified. The installation instructions below refer to the original published firmware, not the beta build.
+
+
 
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg). ![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen.svg). ![Hardware: ESP32-S3-Zero](https://img.shields.io/badge/Hardware-ESP32--S3--Zero-blue.svg). ![Audio: I2S](https://img.shields.io/badge/Audio-I2S%20Digital-orange.svg)
