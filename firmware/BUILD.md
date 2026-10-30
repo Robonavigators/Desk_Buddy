@@ -1,38 +1,36 @@
-# Desk Buddy Firmware v2 — independent README-based rebuild
+# Desk Buddy — Beta rebuild build guide
 
-This is a clean implementation of the original repository README. The existing root sketch is **not read, modified, or replaced**. New firmware lives at \`firmware/DeskBuddyRebuilt/DeskBuddyRebuilt.ino\`.
+The firmware at [`DeskBuddyRebuilt/DeskBuddyRebuilt.ino`](DeskBuddyRebuilt/DeskBuddyRebuilt.ino) is a separate, untested implementation based on the project README. The original root sketch was **not opened, edited or replaced**.
 
-## Build
+## Building
 
-From the repo root: \`pio run -c firmware/platformio.ini -d firmware/DeskBuddyRebuilt\` may not pick up the project source path because PlatformIO normally expects \`src/\`. The recommended approach is to run from \`firmware/\` with \`src_dir\` configured below, or copy \`DeskBuddyRebuilt.ino\` into a matching Arduino sketch folder.
+**Arduino IDE:** Open `firmware/DeskBuddyRebuilt/DeskBuddyRebuilt.ino`, choose ESP32-S3 (Arduino-ESP32 **3.x**) and install `TFT_eSPI`, `ArduinoJson 7`, `DHT sensor library` and `Adafruit Unified Sensor`. Update **TFT_eSPI User_Setup** for the actual panel before compiling; sketch-local pin macros will not automatically reconfigure separately compiled library source.
 
-**Arduino IDE**: Open \`firmware/DeskBuddyRebuilt/DeskBuddyRebuilt.ino\`. Select an ESP32-S3 board with Arduino-ESP32 3.x and install TFT_eSPI, DHT sensor library, Adafruit Unified Sensor, and ArduinoJson 7. Configure TFT_eSPI ST7735 to SPI MOSI 11, SCLK 12, CS 10, DC 9, RST 8, 128×160.
+**PlatformIO:** Open the `firmware` folder and run `pio run`. Its `platformio.ini` sets the source directory and the initial ST7735 TFT settings. Validate the exact ESP32-S3-Zero flash/partition configuration and display tab variant before flashing.
 
-**PlatformIO**: Open the \`firmware\` folder and execute \`pio run\`. Uses the PlatformIO project configuration with explicit TFT pin definitions.
+TFT: ST7735 128x160, MOSI GPIO 11, SCLK 12, CS 10, DC 9, RST 8. MAX98357A: BCLK 6, WS 7, DIN 5, SD 14. DHT11: data 4. TTP223 active-HIGH output: 3. Status LED: 2. Use a common ground and power the amplifier as required by its hardware.
 
-## Hardware
+## Feature and display notes
 
-TFT: 11 MOSI, 12 CLK, 10 CS, 9 DC, 8 RST. MAX98357A: 6 BCLK, 7 LRCLK, 5 DIN, 14 SD. DHT11: 4 DATA. TTP223 active-high: 3 OUT. Status LED: 2. Common ground required.
+- Setup access point: `Desk_Buddy-XXXX` (last 4 hexadecimal characters based on the ESP32 MAC); password: `Desk_Buddy1234@`; portal: `http://192.168.4.1`.
+- The portal saves Wi-Fi, city, optional OpenWeatherMap key, 12/24-hour clock, accent color, and 10 alarms in NVS.
+- OpenWeatherMap provides current weather and 3-day approximate high/low temperatures from a 3-hourly forecast when the key is configured. Open-Meteo is the fallback when a key is missing or requests fail. Requests refresh around every 30 minutes.
+- Display pages: Clock, Weather, 3-Day Forecast, Alarms, Robot Eyes. Each frame is composed in a `TFT_eSprite` (16-bit, 8-bit allocation fallback) then pushed in one update to reduce flicker. Font 1/size 1 is reset at every frame. Eye animation is sine-driven with blinks, ~10 fps; other pages update about once a second.
+- The ArduinoJson 7 compatibility fix uses `.as<JsonArray>().size() > 0` rather than `.isEmpty()`.
 
-## Important limitations and validation
+## Limitations and testing checklist
 
-- Board-specific verification on the actual ESP32-S3-Zero and 128×160 ST7735 display is still required. Some ST7735 panels need a different tab or pixel offset configuration; a GC9A01 must use a different display driver, and most GC9A01 units are not 128×160.
-- MAX98357A expects a stable power supply. Do not power a 5V amplifier from a 3.3V pin; connect grounds together.
-- TTP223 must be active-high (momentary) for the touch gestures and EXT1 touch wake described in the README. Check its quiescent output is LOW. Avoid leaving touch active when entering sleep.
-- The temperature safety thresholds monitor the **on-chip** temperature, not the DHT11 ambient temperature. Deep sleep at >=70 C can itself require a touch wake while hot; deploy thermal protection only after bench testing.
-- HTTPS weather requests currently use \`WiFiClientSecure::setInsecure()\` (encrypted but no certificate authentication). For production security replace with certificate-verified connections using an appropriate CA bundle.
-- The basic note sequences are short original approximations, not complete copyrighted themes.
-- Open-Meteo geocoding and forecast are refreshed approximately every 30 minutes when online; HTTP fetches are synchronous on Core 1 so web/UI can briefly pause during network timeouts. Audio stays on Core 0.
-- The current implementation synchronizes time using the saved location string as the timezone; verify DST and timezone behavior for your deployment. Clock will not correctly ring until NTP sync succeeds.
-- The status LED is held high during deep sleep, which continues drawing LED current. It is **not** an ultra-low-power sleep design if the LED is directly driven.
-- Captive portal SSID/password are fixed exactly as specified in the README; configuration is saved in NVS. The password is readable by anyone who knows the published default; use this in a trusted environment.
-- ArduinoOTA should be protected with a password before exposing the clock to an untrusted LAN.
-- This branch has not been physically flashed or bench-tested.
+- **Not yet compile-verified or flashed** on actual ESP32-S3-Zero hardware. Verify exact TFT ST7735 driver tab/offset and color order; GC9A01 displays require another build configuration.
+- HTTPS currently uses `WiFiClientSecure::setInsecure()` (no server certificate verification). **Do not deploy as secure** until certificate verification is configured.
+- ArduinoOTA lacks authentication; run only on a trusted LAN until it is protected.
+- Wi-Fi/AP fixed published password is meant only for hobby setup, not a security boundary. The OpenWeatherMap API key is saved in ESP32 NVS; it is not displayed back in the portal.
+- Weather calls are synchronous on Core 1 and may briefly block the UI, even though I2S alarm audio runs on Core 0.
+- Thermal thresholds read ESP32 chip temperature, not ambient DHT11. Deep sleep with LED held HIGH still consumes current and **does not wake for scheduled alarms**.
+- Timezone uses a stored UTC offset sourced from the provider. Daylight-saving transitions require re-sync; test for regions with DST.
+- TTP223 must be active-HIGH momentary for EXT1 touch wake. Check touch is released before sleeping.
+- Melody sequences are short illustrative approximations, not full theme recordings.
+- Whenever modifying firmware, update `README.md` in the same change to document features, pin/wiring changes, fixes, test status, and any limitations.
 
-## Touch actions
+## Touch gestures
 
-Tap: next screen or stop alarm. Double-tap: reboot into setup portal or snooze 5 minutes. Hold >650ms: sleep or dismiss today's ringing alarm.
-
-## Web setup
-
-Connect to \`Desk_Buddy\`, password \`Desk_Buddy1234@\`, and browse \`http://192.168.4.1\`. Choose Wi-Fi, city, 12/24-hour clock, accent color and up to ten alarms. Save to reboot.
+Single tap cycles screens or stops a ringing alarm. Double tap enters setup or snoozes an alarm for five minutes. Long press (>650 ms) enters deep sleep or dismisses ringing alarm for the day.
