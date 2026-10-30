@@ -21,14 +21,18 @@ constexpr int PIN_TOUCH=3, PIN_LED=2, PIN_DHT=4, PIN_AMP_SD=14;
 constexpr int PIN_I2S_DOUT=5, PIN_I2S_BCLK=6, PIN_I2S_LRCK=7;
 constexpr uint16_t PORTAL_DNS=53;
 constexpr uint32_t TOUCH_DEBOUNCE=35, LONG_PRESS_MS=650, DOUBLE_TAP_MS=330;
-const char* AP_SSID="Desk_Buddy";
+String apSSID(){
+  uint64_t id=ESP.getEfuseMac();char suffix[5];
+  snprintf(suffix,sizeof(suffix),"%04X",(unsigned)(id&0xFFFF));
+  return "Desk_Buddy-"+String(suffix);
+}
 const char* AP_PASSWORD="Desk_Buddy1234@";
 const char* NTP_SERVER="pool.ntp.org";
 const char* TONES[]={"Mario","Zelda","Beep","StarWars"};
 struct Alarm { bool enabled=false; uint8_t hour=7,minute=0,tone=2; int lastDay=-1; };
 Alarm alarms[10];
 struct Settings {
-  String ssid,password,city="Thiruvananthapuram",accent="#0484f8";
+  String ssid,password,openWeatherKey,city="Thiruvananthapuram",accent="#0484f8";
   bool hour24=true;
   float lat=8.5241f, lon=76.9366f;
   String timezone="Asia/Kolkata";
@@ -39,7 +43,7 @@ struct Weather {
   int code=-1;
   String dates[3]; float highs[3], lows[3]; int codes[3];
   uint32_t lastAttempt=0;
-  bool ready=false;
+  bool ready=false,forecastReady=false;
 } weather;
 Preferences prefs;
 WebServer server(80);
@@ -79,6 +83,7 @@ String urlEncode(const String& s){
 void saveSettings(){
   prefs.begin("deskbuddy",false);
   prefs.putString("ssid",cfg.ssid); prefs.putString("pass",cfg.password);
+  prefs.putString("owmkey",cfg.openWeatherKey);
   prefs.putString("city",cfg.city); prefs.putString("accent",cfg.accent);
   prefs.putBool("hour24",cfg.hour24); prefs.putFloat("lat",cfg.lat);
   prefs.putFloat("lon",cfg.lon); prefs.putString("tz",cfg.timezone);
@@ -95,6 +100,7 @@ void loadSettings(){
   prefs.begin("deskbuddy",true);
   cfg.ssid=prefs.getString("ssid","");
   cfg.password=prefs.getString("pass","");
+  cfg.openWeatherKey=prefs.getString("owmkey","");
   cfg.city=prefs.getString("city",cfg.city);
   cfg.accent=prefs.getString("accent",cfg.accent);
   cfg.hour24=prefs.getBool("hour24",true);
@@ -236,7 +242,7 @@ void drawScreens(){
       frame.setTextColor(TFT_WHITE,TFT_BLACK);frame.setTextSize(1);
       for(int i=0;i<3;i++){
         frame.setCursor(4,34+i*38);
-        if(weather.ready){frame.print(weather.dates[i]);frame.setCursor(4,46+i*38);
+        if(weather.forecastReady){frame.print(weather.dates[i]);frame.setCursor(4,46+i*38);
           frame.printf("%.0f / %.0f C",weather.highs[i],weather.lows[i]);}
         else frame.print("Waiting for WiFi...");
       }break;
@@ -275,6 +281,9 @@ small{opacity:.85}</style></head><body><main><h1>Desk Buddy</h1><p>Configure you
   int n=WiFi.scanNetworks(false,true);
   for(int i=0;i<n;i++)p+="<option value=\""+htmlEscape(WiFi.SSID(i))+"\""+(cfg.ssid==WiFi.SSID(i)?" selected":"")+">"+htmlEscape(WiFi.SSID(i))+"</option>";
   p+="</select><label>Wi-Fi password (leave blank to keep saved)</label><input name='password' type='password' placeholder='Wi-Fi password'>";
+  p+="<label>OpenWeatherMap API key (optional)</label><input type='password' name='owmkey' autocomplete='off' placeholder='Paste key, blank keeps saved'>";
+  if(!cfg.openWeatherKey.isEmpty())p+="<small>API key saved. Leave blank to keep it.</small>";
+  p+="<label><input type='checkbox' name='clearowm' value='1'> Clear saved API key</label>";
   p+="<label>City</label><input name='city' value='"+htmlEscape(cfg.city)+"' required>";
   p+="<label>Time format</label><select name='hour24'><option value='1'"+String(cfg.hour24?" selected":"")+">24-hour</option><option value='0'"+String(!cfg.hour24?" selected":"")+">12-hour</option></select>";
   p+="<label>Accent color</label><input type='color' name='accent' value='"+htmlEscape(cfg.accent)+"'>";
@@ -303,6 +312,12 @@ void handleSave(){
   }
   cfg.ssid=ssid;
   if(server.hasArg("password")&&!server.arg("password").isEmpty())cfg.password=server.arg("password");
+  if(server.hasArg("clearowm"))cfg.openWeatherKey="";
+  else if(server.hasArg("owmkey")&&!server.arg("owmkey").isEmpty()){
+    String key=server.arg("owmkey");key.trim();
+    if(key.length()>128){server.send(400,"text/plain","API key too long");return;}
+    cfg.openWeatherKey=key;
+  }
   cfg.city=city;cfg.accent=color;cfg.hour24=server.arg("hour24")=="1";
   for(int i=0;i<10;i++){
     String k=String(i),tm=server.arg("t"+k);
@@ -321,7 +336,8 @@ void handleSave(){
 void startPortal(){
   portal=true;wifiOnline=false;
   WiFi.mode(WIFI_AP_STA);
-  WiFi.softAP(AP_SSID,AP_PASSWORD);
+  String ap=apSSID();
+  WiFi.softAP(ap.c_str(),AP_PASSWORD);
   dns.start(PORTAL_DNS,"*",WiFi.softAPIP());
   server.on("/",HTTP_GET,[]{server.send(200,"text/html",portalHtml());});
   server.on("/save",HTTP_POST,handleSave);
