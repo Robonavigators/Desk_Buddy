@@ -360,34 +360,91 @@ bool getJson(const String& url,JsonDocument& doc){
   bool ok=status==HTTP_CODE_OK && deserializeJson(doc,http.getStream())==DeserializationError::Ok;
   http.end();return ok;
 }
+
+bool loadOWMForecast(){
+  if(cfg.openWeatherKey.isEmpty())return false;
+  JsonDocument forecast;
+  String url="https://api.openweathermap.org/data/2.5/forecast?lat="+String(cfg.lat,5)+
+    "&lon="+String(cfg.lon,5)+"&units=metric&appid="+urlEncode(cfg.openWeatherKey);
+  if(!getJson(url,forecast)||!forecast["list"].is<JsonArray>())return false;
+  int offset=forecast["city"]["timezone"]|cfg.utcOffset;
+  String dates[3];float highs[3]={-1000,-1000,-1000},lows[3]={1000,1000,1000};
+  int codes[3]={-1,-1,-1};int dayCount=0;
+  for(JsonObject item:forecast["list"].as<JsonArray>()){
+    time_t stamp=(time_t)(item["dt"].as<int64_t>()+offset);
+    struct tm localDate;gmtime_r(&stamp,&localDate);
+    char label[11];strftime(label,sizeof(label),"%Y-%m-%d",&localDate);
+    String day(label);int index=-1;
+    for(int i=0;i<dayCount;i++)if(dates[i]==day){index=i;break;}
+    if(index<0){if(dayCount==3)break;index=dayCount++;dates[index]=day;}
+    float high=item["main"]["temp_max"]|NAN,low=item["main"]["temp_min"]|NAN;
+    if(isfinite(high)&&high>highs[index])highs[index]=high;
+    if(isfinite(low)&&low<lows[index])lows[index]=low;
+    if(codes[index]<0)codes[index]=item["weather"][0]["id"]|-1;
+  }
+  if(dayCount<3)return false;
+  for(int i=0;i<3;i++)if(highs[i]==-1000||lows[i]==1000)return false;
+  for(int i=0;i<3;i++){
+    weather.dates[i]=dates[i];weather.highs[i]=highs[i];
+    weather.lows[i]=lows[i];weather.codes[i]=codes[i];
+  }
+  cfg.utcOffset=offset;return true;
+}
 void fetchWeather(){
   if(!wifiOnline)return;
   weather.lastAttempt=millis();
   JsonDocument geo;
-  String url="https://geocoding-api.open-meteo.com/v1/search?name="+urlEncode(cfg.city)+"&count=1";
-  if(getJson(url,geo)&&geo["results"].is<JsonArray>()&&!geo["results"].as<JsonArray>().isEmpty()){
+  String geocode="https://geocoding-api.open-meteo.com/v1/search?name="+urlEncode(cfg.city)+"&count=1";
+  if(getJson(geocode,geo)&&geo["results"].is<JsonArray>()&&geo["results"].as<JsonArray>().size()>0){
     JsonObject place=geo["results"][0];
     cfg.lat=place["latitude"]|cfg.lat;cfg.lon=place["longitude"]|cfg.lon;
     cfg.timezone=(const char*)(place["timezone"]|"Asia/Kolkata");
+  }
+  bool currentOk=false,forecastOk=false;
+  if(!cfg.openWeatherKey.isEmpty()){
+    JsonDocument current;
+    String url="https://api.openweathermap.org/data/2.5/weather?lat="+String(cfg.lat,5)+
+      "&lon="+String(cfg.lon,5)+"&units=metric&appid="+urlEncode(cfg.openWeatherKey);
+    if(getJson(url,current)&&!current["main"]["temp"].isNull()){
+      weather.temperature=current["main"]["temp"].as<float>();
+      weather.wind=(current["wind"]["speed"]|0.0f)*3.6f;
+      weather.code=current["weather"][0]["id"]|-1;
+      cfg.utcOffset=current["timezone"]|cfg.utcOffset;
+      currentOk=true;
+    }
+    forecastOk=loadOWMForecast();
+  }
+  if(!currentOk||!forecastOk){
+    JsonDocument fallback;
+    String url="https://api.open-meteo.com/v1/forecast?latitude="+String(cfg.lat,5)+
+      "&longitude="+String(cfg.lon,5)+
+      "&current=temperature_2m,weather_code,wind_speed_10m"+
+      "&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=3&timezone=auto";
+    if(getJson(url,fallback)){
+      if(!currentOk&&!fallback["current"]["temperature_2m"].isNull()){
+        weather.temperature=fallback["current"]["temperature_2m"].as<float>();
+        weather.wind=fallback["current"]["wind_speed_10m"]|NAN;
+        weather.code=fallback["current"]["weather_code"]|-1;
+        currentOk=true;
+      }
+      if(!forecastOk&&fallback["daily"]["time"].is<JsonArray>()&&
+          fallback["daily"]["time"].as<JsonArray>().size()>=3){
+        for(int i=0;i<3;i++){
+          weather.dates[i]=String((const char*)(fallback["daily"]["time"][i]|"---"));
+          weather.highs[i]=fallback["daily"]["temperature_2m_max"][i]|NAN;
+          weather.lows[i]=fallback["daily"]["temperature_2m_min"][i]|NAN;
+          weather.codes[i]=fallback["daily"]["weather_code"][i]|-1;
+        }
+        forecastOk=true;
+      }
+      cfg.utcOffset=fallback["utc_offset_seconds"]|cfg.utcOffset;
+    }
+  }
+  if(currentOk||forecastOk){
+    weather.ready=currentOk;weather.forecastReady=forecastOk;
     configTime(cfg.utcOffset,0,NTP_SERVER,"time.google.com");
+    saveSettings();
   }
-  JsonDocument doc;
-  String forecast="https://api.open-meteo.com/v1/forecast?latitude="+String(cfg.lat,5)+"&longitude="+String(cfg.lon,5)+
-    "&current=temperature_2m,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min&forecast_days=3&timezone=auto";
-  if(!getJson(forecast,doc))return;
-  cfg.utcOffset=doc["utc_offset_seconds"]|cfg.utcOffset;
-  configTime(cfg.utcOffset,0,NTP_SERVER,"time.google.com");
-  weather.temperature=doc["current"]["temperature_2m"]|NAN;
-  weather.code=doc["current"]["weather_code"]|-1;
-  weather.wind=doc["current"]["wind_speed_10m"]|NAN;
-  for(int i=0;i<3;i++){
-    weather.dates[i]=String((const char*)(doc["daily"]["time"][i]|"---"));
-    weather.highs[i]=doc["daily"]["temperature_2m_max"][i]|NAN;
-    weather.lows[i]=doc["daily"]["temperature_2m_min"][i]|NAN;
-    weather.codes[i]=doc["daily"]["weather_code"][i]|-1;
-  }
-  weather.ready=true;
-  saveSettings();
 }
 void enterSleep(){
   stopAlarm();digitalWrite(PIN_AMP_SD,LOW);
