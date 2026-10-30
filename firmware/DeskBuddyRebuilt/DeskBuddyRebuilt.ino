@@ -46,6 +46,8 @@ WebServer server(80);
 DNSServer dns;
 DHT dht(PIN_DHT,DHT11);
 TFT_eSPI tft;
+TFT_eSprite frame(&tft);
+bool frameReady=false;
 i2s_chan_handle_t audioChannel=nullptr;
 TaskHandle_t audioTaskHandle=nullptr;
 portMUX_TYPE alarmMux=portMUX_INITIALIZER_UNLOCKED;
@@ -182,9 +184,9 @@ void beginAudio(){
   xTaskCreatePinnedToCore(audioTask,"alarm-audio",4096,nullptr,2,&audioTaskHandle,0);
 }
 void drawHeader(const String& title){
-  tft.fillScreen(TFT_BLACK);tft.fillRect(0,0,128,22,accent565());
-  tft.setTextColor(TFT_WHITE,accent565());tft.setTextSize(1);
-  tft.setCursor(7,7);tft.print(title);
+  frame.fillScreen(TFT_BLACK);frame.fillRect(0,0,128,22,accent565());
+  frame.setTextColor(TFT_WHITE,accent565());frame.setTextSize(1);
+  frame.setCursor(7,7);frame.print(title);
 }
 String timeLabel(uint8_t h,uint8_t m){
   char buf[16];int hour=cfg.hour24?h:((h+11)%12+1);
@@ -192,69 +194,74 @@ String timeLabel(uint8_t h,uint8_t m){
   String s(buf);if(!cfg.hour24)s+=h>=12?" PM":" AM";return s;
 }
 void drawScreens(){
+  if(!frameReady)return;
+  frame.setTextFont(1);
+  frame.setTextSize(1);
   int alarm=activeAlarm;
   if(alarm>=0){
     drawHeader("ALARM RINGING");
-    tft.setTextSize(2);tft.setTextColor(TFT_YELLOW,TFT_BLACK);
-    tft.setCursor(6,44);tft.print(timeLabel(alarms[alarm].hour,alarms[alarm].minute));
-    tft.setTextSize(1);tft.setCursor(5,105);tft.print("Tap: stop");
-    tft.setCursor(5,119);tft.print("2 taps: snooze");
-    tft.setCursor(5,133);tft.print("Hold: dismiss");return;
+    frame.setTextSize(2);frame.setTextColor(TFT_YELLOW,TFT_BLACK);
+    frame.setCursor(6,44);frame.print(timeLabel(alarms[alarm].hour,alarms[alarm].minute));
+    frame.setTextSize(1);frame.setCursor(5,105);frame.print("Tap: stop");
+    frame.setCursor(5,119);frame.print("2 taps: snooze");
+    frame.setCursor(5,133);frame.print("Hold: dismiss");frame.pushSprite(0,0);return;
   }
   struct tm now;
   bool valid=getLocalTime(&now,2);
   switch(screenIndex){
     case 0:{
       drawHeader("DESK BUDDY");
-      tft.setTextColor(TFT_WHITE,TFT_BLACK);tft.setTextSize(2);
-      tft.setCursor(4,40);tft.print(valid?timeLabel(now.tm_hour,now.tm_min):"--:--");
-      tft.setTextSize(1);tft.setCursor(5,80);
-      if(valid){char d[28];strftime(d,sizeof(d),"%a %d %b %Y",&now);tft.print(d);}
-      else tft.print("Syncing time...");
-      tft.setCursor(5,103);tft.printf("Room: %.0f C",indoorTemp);
-      tft.setCursor(5,118);tft.printf("Humidity: %.0f%%",indoorHumidity);
-      tft.setCursor(5,143);tft.print(wifiOnline?"WiFi connected":"Offline");break;
+      frame.setTextColor(TFT_WHITE,TFT_BLACK);frame.setTextSize(2);
+      frame.setCursor(4,40);frame.print(valid?timeLabel(now.tm_hour,now.tm_min):"--:--");
+      frame.setTextSize(1);frame.setCursor(5,80);
+      if(valid){char d[28];strftime(d,sizeof(d),"%a %d %b %Y",&now);frame.print(d);}
+      else frame.print("Syncing time...");
+      frame.setCursor(5,103);frame.printf("Room: %.0f C",indoorTemp);
+      frame.setCursor(5,118);frame.printf("Humidity: %.0f%%",indoorHumidity);
+      frame.setCursor(5,143);frame.print(wifiOnline?"WiFi connected":"Offline");break;
     }
     case 1:{
       drawHeader("WEATHER");
-      tft.setTextColor(TFT_WHITE,TFT_BLACK);tft.setTextSize(1);
-      tft.setCursor(5,34);tft.print(cfg.city.substring(0,20));
-      tft.setTextSize(2);tft.setCursor(7,61);
-      if(weather.ready)tft.printf("%.1f C",weather.temperature);else tft.print("-- C");
-      tft.setTextSize(1);tft.setCursor(5,104);
-      if(weather.ready)tft.printf("Code: %d",weather.code);
-      tft.setCursor(5,122);if(weather.ready)tft.printf("Wind: %.0f km/h",weather.wind);
+      frame.setTextColor(TFT_WHITE,TFT_BLACK);frame.setTextSize(1);
+      frame.setCursor(5,34);frame.print(cfg.city.substring(0,20));
+      frame.setTextSize(2);frame.setCursor(7,61);
+      if(weather.ready)frame.printf("%.1f C",weather.temperature);else frame.print("-- C");
+      frame.setTextSize(1);frame.setCursor(5,104);
+      if(weather.ready)frame.printf("Code: %d",weather.code);
+      frame.setCursor(5,122);if(weather.ready)frame.printf("Wind: %.0f km/h",weather.wind);
       break;
     }
     case 2:{
       drawHeader("3 DAY FORECAST");
-      tft.setTextColor(TFT_WHITE,TFT_BLACK);tft.setTextSize(1);
+      frame.setTextColor(TFT_WHITE,TFT_BLACK);frame.setTextSize(1);
       for(int i=0;i<3;i++){
-        tft.setCursor(4,34+i*38);
-        if(weather.ready){tft.print(weather.dates[i]);tft.setCursor(4,46+i*38);
-          tft.printf("%.0f / %.0f C",weather.highs[i],weather.lows[i]);}
-        else tft.print("Waiting for WiFi...");
+        frame.setCursor(4,34+i*38);
+        if(weather.ready){frame.print(weather.dates[i]);frame.setCursor(4,46+i*38);
+          frame.printf("%.0f / %.0f C",weather.highs[i],weather.lows[i]);}
+        else frame.print("Waiting for WiFi...");
       }break;
     }
     case 3:{
       drawHeader("ALARMS");
-      tft.setTextColor(TFT_WHITE,TFT_BLACK);tft.setTextSize(1);
-      for(int i=0;i<10;i++){tft.setCursor(3,25+i*13);
-        tft.printf("%02d %s %s",i+1,
+      frame.setTextColor(TFT_WHITE,TFT_BLACK);frame.setTextSize(1);
+      for(int i=0;i<10;i++){frame.setCursor(3,25+i*13);
+        frame.printf("%02d %s %s",i+1,
           timeLabel(alarms[i].hour,alarms[i].minute).c_str(),alarms[i].enabled?"ON":"--");
       }break;
     }
     default:{
-      tft.fillScreen(TFT_BLACK);
-      tft.fillRoundRect(10,48,44,53,12,accent565());
-      tft.fillRoundRect(74,48,44,53,12,accent565());
-      int drift=(millis()/1600)%3-1;
-      tft.fillCircle(32+drift*4,74,10,TFT_BLACK);
-      tft.fillCircle(96+drift*4,74,10,TFT_BLACK);
-      tft.setTextColor(TFT_WHITE,TFT_BLACK);tft.setTextSize(1);
-      tft.setCursor(28,125);tft.print("HELLO!");break;
+      frame.fillScreen(TFT_BLACK);
+      frame.fillRoundRect(10,blink?72:48,44,blink?5:53,blink?2:12,accent565());
+      frame.fillRoundRect(74,blink?72:48,44,blink?5:53,blink?2:12,accent565());
+      int drift=(int)roundf(sinf(millis()*0.0024f)*7.0f);
+      bool blink=(millis()%5100)<120;
+      if(!blink)frame.fillCircle(32+drift,74,10,TFT_BLACK);
+      if(!blink)frame.fillCircle(96+drift,74,10,TFT_BLACK);
+      frame.setTextColor(TFT_WHITE,TFT_BLACK);frame.setTextSize(1);
+      frame.setCursor(28,125);frame.print("HELLO!");break;
     }
   }
+  frame.pushSprite(0,0);
 }
 String portalHtml(){
   String p=R"HTML(<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Desk Buddy Setup</title><style>
@@ -438,6 +445,10 @@ void setup(){
   touchWasDown=digitalRead(PIN_TOUCH)==HIGH;
   gpio_hold_dis((gpio_num_t)PIN_LED);
   tft.init();tft.setRotation(0);tft.fillScreen(TFT_BLACK);
+  frame.setColorDepth(16);
+  frameReady=frame.createSprite(128,160)!=nullptr;
+  if(!frameReady){frame.setColorDepth(8);frameReady=frame.createSprite(128,160)!=nullptr;}
+  if(!frameReady){Serial.println("Sprite allocation failed");tft.print("Display RAM error");}
   dht.begin();loadSettings();beginAudio();
   prefs.begin("deskbuddy",false);forcedPortal=prefs.getBool("setup",false);
   prefs.putBool("setup",false);prefs.end();
@@ -469,6 +480,7 @@ void loop(){
     if(isfinite(t))indoorTemp=t;if(isfinite(h))indoorHumidity=h;
     checkThermal();
   }
-  if(now-lastDraw>350){lastDraw=now;drawScreens();}
+  uint32_t renderPeriod=(activeAlarm<0&&screenIndex==4)?100:1000;
+  if(lastDraw==0||now-lastDraw>=renderPeriod){lastDraw=now;drawScreens();}
   delay(3); // cooperative yield; Core 0 audio does not rely on this loop.
 }
