@@ -66,7 +66,9 @@ The ESP32 firmware must store the alarm count alongside the alarm slots, compact
 
 The planned setup network uses the format **`Desk_Buddy-XXXX`**, where the four-character suffix distinguishes devices.
 
-The captive portal is designed to allow configuration of Wi-Fi credentials, city, clock format, accent color, alarms, and an optional OpenWeatherMap API key. The weather system is designed to retrieve current conditions and a three-day forecast, falling back to Open-Meteo when necessary.
+The captive portal is designed to allow configuration of Wi-Fi credentials, city, clock format, accent color, alarms, and an optional OpenWeatherMap API key. The key is stored locally in the ESP32's **non-volatile storage (NVS)** so it remains available after a reboot or power loss. The password-style input is not prefilled or echoed back to the browser; leaving it blank retains an existing key, while **Remove saved API key** clears it during saving. The weather system is designed to retrieve current conditions and a three-day forecast, falling back to Open-Meteo when necessary.
+
+NVS preserves settings but is **not a secure vault**. Anyone with physical or firmware-level access to the device may be able to recover stored credentials. API keys are not included in the public repository.
 
 ## Home Assistant integration
 
