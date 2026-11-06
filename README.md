@@ -15,7 +15,7 @@ The project aims to work independently on your desk, with optional smart-home co
 | **Five display screens** | Clock, weather, three-day forecast, alarm list, and animated robot eyes |
 | **Weather** | Current conditions and three-day outlook using OpenWeatherMap, with Open-Meteo as a fallback |
 | **Room monitoring** | DHT11 temperature and humidity readings |
-| **Alarms** | Ten configurable alarms, selectable tones, snooze, and dismiss controls |
+| **Alarms** | Clock-style alarm manager with create, edit, enable/disable, and delete controls (up to ten alarms), selectable tones, snooze, and dismiss controls |
 | **Touch interaction** | Tap, double-tap, and long-press actions |
 | **Wi-Fi setup** | A built-in captive portal for wireless configuration |
 | **Interface** | Custom accent color, 12/24-hour clock, and planned smoother TFT animation |
@@ -55,6 +55,12 @@ All connected modules must share a common ground. TFT controllers and backlight 
 | Single tap | Move to the next screen | Stop the alarm |
 | Double tap | Open Wi-Fi setup | Snooze for five minutes |
 | Long press | Enter deep sleep | Dismiss the alarm for the day |
+
+## Alarm management
+
+The captive portal's alarm interface is designed to work like a familiar phone clock app: a list of saved alarms with prominently displayed times, individual on/off switches, an **Add alarm** action, and controls to edit the time or melody or delete an alarm. Only created alarms appear in the list; the hardware limit is **ten**. Deleting an alarm is different from disabling it: deletion removes the saved entry, while disabling retains its time and tone.
+
+The ESP32 firmware must store the alarm count alongside the alarm slots, compact remaining slots after deletion, and schedule only active, enabled entries. Existing beta builds with fixed ten slots need a settings migration or a reset before switching to the new format. This interface is in development and is not yet verified on physical hardware.
 
 ## Wi-Fi and weather
 
