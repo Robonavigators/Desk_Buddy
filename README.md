@@ -4,7 +4,7 @@
 
 Desk Buddy is a Robonavigators ESP32-S3-Zero desk companion project: a 128×160 TFT desk clock with environment sensing, alarm audio, Wi-Fi setup and weather forecasting.
 
-> **Source distribution policy — 6 November 2026:** The repository no longer hosts the original `Desk_Buddy.ino` or the experimental rebuild files. Firmware is shared separately, outside GitHub. Old commits and pull-request diffs may still contain historical versions; deleting current files does **not** erase Git history. The design specifications below are not a claim that a current downloadable firmware build exists.
+> **Source distribution policy — 6 November 2026:** The default `main` branch no longer hosts the original `Desk_Buddy.ino`, and the experimental rebuild files were removed from the beta branch. **The historical `rebuild/readme-firmware-v2` branch still contains an inherited copy of `Desk_Buddy.ino` at its tip; that copy has not yet been removed.** Firmware is shared separately, outside GitHub. Old commits and pull-request diffs may still contain historical versions; deleting current files does **not** erase Git history. The design specifications below are not a claim that a current downloadable firmware build exists.
 
 ## Planned / previously prototyped features
 
@@ -49,7 +49,7 @@ This is a hardware proposal only; no BC558/PWM control firmware has been publish
 
 ## Development and documentation
 
-This repository intentionally hosts project documentation, **not firmware source or binaries**. New feature requests, bug fixes, hardware wiring decisions and test outcomes should be reflected here without uploading firmware. Historical firmware may remain accessible in Git commit history until removed separately.
+The `main` branch intentionally hosts documentation, **not firmware source or binaries**. The older beta branch still has an inherited firmware file pending removal. New feature requests, bug fixes, hardware wiring decisions and test outcomes should be reflected here without uploading firmware. Historical firmware may remain accessible in Git commit history until removed separately.
 
 ## License
 
